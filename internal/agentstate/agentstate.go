@@ -22,11 +22,20 @@ import (
 // #4): it stays empty here since this slice does no notify-hook work, but
 // the field exists now so #4 can start writing to it without a schema
 // migration.
+// Hidden marks a thread as archived from the cockpit's own bookkeeping.
+// Issue #5's Archive (`a`) action sets this when no codex-sanctioned
+// archive mechanism is available (codexstate opens codex's sqlite
+// read-only and exposes no write path) — hiding here is the fallback the
+// PRD calls for: "or mark hidden in the cockpit's own agentstate and
+// filter it from the list". A Hidden thread is filtered out of
+// cmd/codex-agents' row list regardless of what codex's own `archived`
+// column later says.
 type Entry struct {
 	TmuxSession   string `json:"tmux_session"`
 	Profile       string `json:"profile"`
 	WorktreePath  string `json:"worktree_path"`
 	LastTurnEvent string `json:"last_turn_event,omitempty"`
+	Hidden        bool   `json:"hidden,omitempty"`
 }
 
 // State is the full contents of state.json: every cockpit-launched thread,
@@ -140,6 +149,25 @@ func UpdateLastTurnEvent(path, threadID, event string) error {
 	}
 	entry := st.Threads[threadID]
 	entry.LastTurnEvent = event
+	st.Threads[threadID] = entry
+	return Save(path, st)
+}
+
+// MarkHidden loads path, sets threadID's Hidden flag to true (preserving
+// its other fields, same pattern as UpdateLastTurnEvent), and saves it
+// back. This is the Archive (`a`) action's fallback write when no
+// codex-sanctioned archive mechanism exists: see Entry.Hidden's doc
+// comment.
+func MarkHidden(path, threadID string) error {
+	st, err := Load(path)
+	if err != nil {
+		return err
+	}
+	if st.Threads == nil {
+		st.Threads = map[string]Entry{}
+	}
+	entry := st.Threads[threadID]
+	entry.Hidden = true
 	st.Threads[threadID] = entry
 	return Save(path, st)
 }

@@ -189,6 +189,105 @@ func TestUpdate_AttachDoneMsg_TriggersRefresh(t *testing.T) {
 	}
 }
 
+func TestUpdate_XOnRow_CallsInterruptWithSelectedRow(t *testing.T) {
+	var gotRow Row
+	called := false
+	actions := Actions{Interrupt: func(row Row) tea.Cmd {
+		called = true
+		gotRow = row
+		return func() tea.Msg { return InterruptDoneMsg{ThreadID: row.Thread.ID} }
+	}}
+	m := newFixtureModel().WithActions(actions)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	_ = updated.(Model)
+	if !called {
+		t.Fatalf("expected Interrupt to be called")
+	}
+	if cmd == nil {
+		t.Fatalf("expected a non-nil Cmd from 'x' on a row")
+	}
+	if gotRow.Thread.Title != "Add dark mode" {
+		t.Fatalf("expected Interrupt called with the selected row, got %+v", gotRow)
+	}
+}
+
+func TestUpdate_XOnRow_WithoutActionsIsNoop(t *testing.T) {
+	m := newFixtureModel()
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	_ = updated.(Model)
+	if cmd != nil {
+		t.Fatalf("expected no cmd when Actions.Interrupt is unset")
+	}
+}
+
+func TestUpdate_InterruptDoneMsg_ShowsStatusLineAndTriggersRefresh(t *testing.T) {
+	refreshCalled := false
+	actions := Actions{Refresh: func() tea.Cmd {
+		refreshCalled = true
+		return func() tea.Msg { return RowsRefreshedMsg{} }
+	}}
+	m := newFixtureModel().WithActions(actions)
+	updated, cmd := m.Update(InterruptDoneMsg{ThreadID: "t2"})
+	m = updated.(Model)
+	if !refreshCalled {
+		t.Fatalf("expected InterruptDoneMsg to trigger Refresh")
+	}
+	if cmd == nil {
+		t.Fatalf("expected a non-nil Cmd from InterruptDoneMsg")
+	}
+	if !strings.Contains(m.View(), "interrupted Add dark mode") {
+		t.Fatalf("expected status line naming the interrupted thread, got:\n%s", m.View())
+	}
+}
+
+func TestUpdate_AOnRow_CallsArchiveWithSelectedRow(t *testing.T) {
+	var gotRow Row
+	called := false
+	actions := Actions{Archive: func(row Row) tea.Cmd {
+		called = true
+		gotRow = row
+		return func() tea.Msg { return ArchiveDoneMsg{ThreadID: row.Thread.ID, Note: "archived " + row.Thread.Title} }
+	}}
+	m := newFixtureModel().WithActions(actions)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	_ = updated.(Model)
+	if !called {
+		t.Fatalf("expected Archive to be called")
+	}
+	if cmd == nil {
+		t.Fatalf("expected a non-nil Cmd from 'a' on a row")
+	}
+	if gotRow.Thread.Title != "Add dark mode" {
+		t.Fatalf("expected Archive called with the selected row, got %+v", gotRow)
+	}
+}
+
+func TestUpdate_AOnRow_WithoutActionsIsNoop(t *testing.T) {
+	m := newFixtureModel()
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	_ = updated.(Model)
+	if cmd != nil {
+		t.Fatalf("expected no cmd when Actions.Archive is unset")
+	}
+}
+
+func TestUpdate_ArchiveDoneMsg_RemovesRowAndShowsNote(t *testing.T) {
+	m := newFixtureModel()
+	updated, _ := m.Update(ArchiveDoneMsg{ThreadID: "t2", Note: "archived; worktree removed"})
+	m = updated.(Model)
+	view := m.View()
+	if strings.Contains(view, "Add dark mode") {
+		t.Fatalf("expected archived thread's row to disappear from the list, got:\n%s", view)
+	}
+	if !strings.Contains(view, "archived; worktree removed") {
+		t.Fatalf("expected archive note in status line, got:\n%s", view)
+	}
+	// The other two fixture rows are untouched.
+	if !strings.Contains(view, "Refactor drainer") || !strings.Contains(view, "Fix auth hook") {
+		t.Fatalf("expected other rows to remain, got:\n%s", view)
+	}
+}
+
 func TestUpdate_RowsRefreshedMsg_ReplacesRows(t *testing.T) {
 	m := newFixtureModel()
 	newRows := []Row{{Thread: codexstate.Thread{ID: "only1", Title: "Only thread"}, Status: tmuxstatus.StatusClosed}}

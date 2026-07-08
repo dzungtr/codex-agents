@@ -60,6 +60,22 @@ func TestSendEnterArgs(t *testing.T) {
 	}
 }
 
+func TestInterruptArgs(t *testing.T) {
+	got := InterruptArgs("cxa-abcd1234")
+	want := []string{"send-keys", "-t", "cxa-abcd1234", "C-c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("InterruptArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestKillSessionArgs(t *testing.T) {
+	got := KillSessionArgs("cxa-abcd1234")
+	want := []string{"kill-session", "-t", "cxa-abcd1234"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("KillSessionArgs() = %v, want %v", got, want)
+	}
+}
+
 func TestInsideTmux(t *testing.T) {
 	t.Setenv("TMUX", "")
 	if InsideTmux() {
