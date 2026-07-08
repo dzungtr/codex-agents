@@ -83,6 +83,42 @@ hook is unavailable (e.g. threads not launched by the cockpit), status degrades 
 open/closed. The list orders waiting → working → closed, most-recent first within each group;
 there are no desktop notifications — the top of the list *is* the inbox.
 
+## Implementation packages
+
+The decisions above were implemented as follows (package names, for readers navigating the
+repo):
+
+- `internal/codexstate` — read-only sqlite/jsonl thread-list source (decision 2)
+- `internal/tmuxstatus` — tmux session naming and status derivation (decisions 3, 5)
+- `internal/agentstate` — `~/.codex-agents/state.json` read/write (decision 2)
+- `internal/codexlaunch` — worktree-per-thread launch invocation (decision 4)
+- `internal/notifyhook` — turn-ended event recording/forwarding (decision 5)
+- `internal/worktreesafety` — uncommitted/unpushed checks backing archive's refusal rule
+  (decision 4)
+- `internal/ui` — bubbletea list model and lipgloss styling (decision 1)
+- `cmd/codex-agents` — the binary entrypoint wiring the packages above together
+
 ## Measured results
 
-_To be filled from the PRD issue's (#1) Results section at initiative close._
+_Filled from the PRD issue's (#1) Results section at initiative close (all 5 child slices
+merged — see #2–#6)._
+
+- **Reliability of `tmux send-keys` quick-reply**: preliminary verdict is **kept** — literal
+  `-l --` text delivery plus a separate Enter keypress, covered by a unit test against a fake
+  runner and a real-tmux integration test, both green. This is not yet a final verdict: it
+  still needs a manual run against real codex to fully confirm reliability in practice. Owner:
+  next person doing daily-driver use of the cockpit should confirm and update this line.
+- **Time from `codex-agents` start to usable list with ~50 threads**: not measured in this
+  build — the sandboxed environment used to build codex-agents has no real `~/.codex`
+  installation with real thread history to measure against. **Open, pending human
+  measurement**: to be measured during actual daily use of codex-agents against a real
+  `~/.codex` state directory with a realistic thread count.
+- **Did codex sqlite schema (`state_5`) survive codex upgrades during the build?**: not
+  observable in this build — no real codex upgrades occurred during the sandboxed build.
+  **Open, pending human observation**: to be tracked across real codex upgrades encountered
+  during actual daily use; if the schema drifts, the degrade-to-jsonl-scan path (decision 2)
+  should be exercised and this line updated with what changed.
+- **Worktree-per-thread overhead per launch**: not measured in this build — no real, repeated
+  launches against real repositories occurred. **Open, pending human measurement**: to be
+  measured during actual daily use of codex-agents (e.g. wall-clock time from launch to a
+  usable attached session, across a few representative repo sizes).
