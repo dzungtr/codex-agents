@@ -27,6 +27,10 @@ func (m Model) View() string {
 	}
 	var b strings.Builder
 	b.WriteString(m.headerLine())
+	if m.statusLine != "" && !m.composerFocused {
+		b.WriteString("\n")
+		b.WriteString(detailStyle.Render(m.statusLine))
+	}
 	b.WriteString("\n\n")
 	b.WriteString(m.listView())
 	b.WriteString("\n\n")
@@ -34,9 +38,13 @@ func (m Model) View() string {
 	return b.String()
 }
 
-// headerLine shows the filter prompt while filtering, otherwise a summary
-// of total threads and how many are currently open.
+// headerLine shows the composer prompt while focused, the filter prompt
+// while filtering, otherwise a summary of total threads and how many are
+// currently open.
 func (m Model) headerLine() string {
+	if m.composerFocused {
+		return fmt.Sprintf("> %s_  [profile: %s]  (@ cycle profile · enter launch · esc cancel)", m.composerTask, m.composerProfile())
+	}
 	if m.filtering {
 		return "/" + m.filterQuery
 	}
@@ -110,12 +118,14 @@ func renderDetail(r Row) string {
 }
 
 func (m Model) footerLine() string {
-	return "↑/k ↓/j navigate    / filter    ? help    q quit"
+	return "↑/k ↓/j navigate    enter attach    i compose    / filter    ? help    q quit"
 }
 
 func (m Model) helpView() string {
 	entries := [][2]string{
 		{"↑ ↓ / j k", "move selection"},
+		{"enter", "attach alive thread / resume closed thread"},
+		{"i", "focus composer (@ swap profile, enter launch, esc cancel)"},
 		{"/", "filter by title, repo, branch"},
 		{"?", "toggle this help"},
 		{"q / ctrl+c", "quit"},

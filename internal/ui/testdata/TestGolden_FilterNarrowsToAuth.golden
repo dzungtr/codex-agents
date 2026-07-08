@@ -3,4 +3,4 @@
 › ○ Fix auth hook                              web-app · fix-auth-hook         1d
     model: gpt-5-codex  profile: -  tokens: -  cwd: /Users/tony/web-app
 
-↑/k ↓/j navigate    / filter    ? help    q quit
+↑/k ↓/j navigate    enter attach    i compose    / filter    ? help    q quit

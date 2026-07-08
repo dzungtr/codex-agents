@@ -35,6 +35,21 @@ type Model struct {
 	filterQuery string
 	showHelp    bool
 
+	// composerFocused, composerTask and composerProfileIdx hold the
+	// composer's state while the user is typing a new task (`i` to
+	// focus). composerProfileIdx indexes composerProfiles; `@` cycles it.
+	composerFocused    bool
+	composerTask       string
+	composerProfileIdx int
+
+	// statusLine is a transient success/error line surfaced by the last
+	// Launch or Attach action, shown under the header until the next one.
+	statusLine string
+
+	// actions are the side-effecting hooks the composer submit and
+	// row-Enter wire up to; see Actions' doc comment.
+	actions Actions
+
 	width, height int
 	quitting      bool
 
@@ -55,6 +70,14 @@ func (m Model) WithClock(now func() time.Time) Model {
 	return m
 }
 
+// WithActions wires the composer-launch and row-attach side effects.
+// Without it (the zero value), submitting the composer or pressing Enter
+// on a row is a harmless no-op.
+func (m Model) WithActions(a Actions) Model {
+	m.actions = a
+	return m
+}
+
 // Quitting reports whether the user has asked to quit (q / ctrl+c).
 func (m Model) Quitting() bool { return m.quitting }
 
@@ -68,6 +91,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+	case ThreadLaunchedMsg:
+		m.rows = append([]Row{msg.Row}, m.rows...)
+		m.applyFilter()
+		m.cursor = 0
+		m.statusLine = "launched " + msg.Row.Thread.Title
+		return m, nil
+	case ThreadLaunchErrorMsg:
+		m.statusLine = "error: " + msg.Err.Error()
+		return m, nil
+	case AttachDoneMsg:
+		m.statusLine = ""
+		if m.actions.Refresh != nil {
+			return m, m.actions.Refresh()
+		}
+		return m, nil
+	case RowsRefreshedMsg:
+		m.rows = msg.Rows
+		m.applyFilter()
+		return m, nil
 	}
 	return m, nil
 }
@@ -79,6 +121,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.showHelp = false
 		}
 		return m, nil
+	}
+
+	if m.composerFocused {
+		return m.handleComposerKey(msg)
 	}
 
 	if m.filtering {
@@ -116,6 +162,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filtering = true
 	case "?":
 		m.showHelp = true
+	case "i":
+		m.composerFocused = true
+		m.composerTask = ""
+		m.composerProfileIdx = 0
+		m.statusLine = ""
+	case "enter":
+		if len(m.visible) > 0 && m.actions.Attach != nil {
+			row := m.rows[m.visible[m.cursor]]
+			return m, m.actions.Attach(row)
+		}
 	}
 	return m, nil
 }
