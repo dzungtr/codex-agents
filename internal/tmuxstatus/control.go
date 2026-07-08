@@ -34,6 +34,25 @@ func InsideTmux() bool {
 	return os.Getenv("TMUX") != ""
 }
 
+// SendKeysArgs builds the argument list for `tmux send-keys -t <session> -l
+// -- <text>`: types text literally into session's active pane (a thread's
+// codex composer, for quick-reply) without tmux interpreting any of it as a
+// key name. Pair with SendEnterArgs to submit — see that function's doc
+// comment for why the two can't be combined into one send-keys call.
+func SendKeysArgs(session, text string) []string {
+	return []string{"send-keys", "-t", session, "-l", "--", text}
+}
+
+// SendEnterArgs builds the argument list for `tmux send-keys -t <session>
+// Enter`: presses the Enter key in session's active pane. This must be a
+// separate call from SendKeysArgs: tmux's `-l` (literal) flag disables
+// key-name lookup for every argument on that command line, so a trailing
+// "Enter" passed alongside literal text would be typed as the word "Enter"
+// rather than pressed as a key.
+func SendEnterArgs(session string) []string {
+	return []string{"send-keys", "-t", session, "Enter"}
+}
+
 // Runner executes a tmux subcommand given its argument list (as built by
 // NewSessionArgs/AttachArgs/SwitchClientArgs). Production code uses
 // ExecRunner; tests inject a fake so launch/attach orchestration can be

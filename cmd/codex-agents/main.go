@@ -91,9 +91,10 @@ func run() error {
 	}
 
 	actions := ui.Actions{
-		Launch:  launchAction(launcher, startDir),
-		Attach:  attachAction(launcher),
-		Refresh: refreshAction(codexHome, statePath),
+		Launch:     launchAction(launcher, startDir),
+		Attach:     attachAction(launcher),
+		Refresh:    refreshAction(codexHome, statePath),
+		QuickReply: quickReplyAction(launcher),
 	}
 
 	_, err = tea.NewProgram(ui.New(rows).WithActions(actions), tea.WithAltScreen()).Run()
@@ -208,6 +209,22 @@ func attachAction(launcher *codexlaunch.Launcher) func(row ui.Row) tea.Cmd {
 			}
 			return ui.AttachDoneMsg{}
 		})
+	}
+}
+
+// quickReplyAction adapts codexlaunch.Launcher.QuickReply into a
+// ui.Actions.QuickReply hook (PRD #1's List behavior -> Quick reply row /
+// issue #6): it runs synchronously inside the returned tea.Cmd, same
+// pattern as launchAction, and turns the result into ui.QuickReplySentMsg
+// or ui.ThreadLaunchErrorMsg.
+func quickReplyAction(launcher *codexlaunch.Launcher) func(threadID, text string) tea.Cmd {
+	return func(threadID, text string) tea.Cmd {
+		return func() tea.Msg {
+			if err := launcher.QuickReply(threadID, text); err != nil {
+				return ui.ThreadLaunchErrorMsg{Err: err}
+			}
+			return ui.QuickReplySentMsg{ThreadID: threadID}
+		}
 	}
 }
 
