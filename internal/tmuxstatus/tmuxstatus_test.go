@@ -18,20 +18,41 @@ func TestSessionName(t *testing.T) {
 	}
 }
 
-func TestStatusFor(t *testing.T) {
+// TestStatusFor_DerivationMatrix exercises the event x tmux-liveness matrix
+// from PRD #1 / issue #4: tmux alive + turn in progress = working; tmux
+// alive + turn ended = waiting; no tmux session = closed — and a dead
+// session always reads as closed even with stale "turn ended" event
+// history (turnEnded=true), since a killed session can't be waiting on
+// anything.
+func TestStatusFor_DerivationMatrix(t *testing.T) {
 	live := NewLiveSet([]string{SessionName("thread-alive-123"), "cxa-other99"})
 
-	if got := StatusFor("thread-alive-123", live); got != StatusOpen {
-		t.Errorf("StatusFor(alive) = %v, want StatusOpen", got)
+	tests := []struct {
+		name      string
+		threadID  string
+		turnEnded bool
+		want      Status
+	}{
+		{"alive + turn in progress = working", "thread-alive-123", false, StatusWorking},
+		{"alive + turn ended = waiting", "thread-alive-123", true, StatusWaiting},
+		{"dead + turn in progress = closed", "thread-closed-456", false, StatusClosed},
+		{"dead + stale turn-ended event = still closed", "thread-closed-456", true, StatusClosed},
 	}
-	if got := StatusFor("thread-closed-456", live); got != StatusClosed {
-		t.Errorf("StatusFor(closed) = %v, want StatusClosed", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := StatusFor(tt.threadID, live, tt.turnEnded); got != tt.want {
+				t.Errorf("StatusFor(%q, live, %v) = %v, want %v", tt.threadID, tt.turnEnded, got, tt.want)
+			}
+		})
 	}
 }
 
 func TestStatusString(t *testing.T) {
-	if StatusOpen.String() != "open" {
-		t.Errorf("StatusOpen.String() = %q, want open", StatusOpen.String())
+	if StatusWorking.String() != "working" {
+		t.Errorf("StatusWorking.String() = %q, want working", StatusWorking.String())
+	}
+	if StatusWaiting.String() != "waiting" {
+		t.Errorf("StatusWaiting.String() = %q, want waiting", StatusWaiting.String())
 	}
 	if StatusClosed.String() != "closed" {
 		t.Errorf("StatusClosed.String() = %q, want closed", StatusClosed.String())

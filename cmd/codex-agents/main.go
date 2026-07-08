@@ -1,30 +1,65 @@
 // Command codex-agents is the cockpit's entry point: a terminal list of
 // every codex thread, sourced from codexstate (thread data) and tmuxstatus
-// (open/closed liveness), rendered by the ui package. This slice (#3)
-// additionally wires the composer (launch a new thread into a worktree +
-// detached tmux session via internal/codexlaunch) and the Enter/Detach
-// handoff (attach an alive thread, or `codex resume` a closed one).
+// (working/waiting/closed status), rendered by the ui package. This slice
+// (#3) wires the composer (launch a new thread into a worktree + detached
+// tmux session via internal/codexlaunch) and the Enter/Detach handoff
+// (attach an alive thread, or `codex resume` a closed one). Slice #4 adds
+// the notify-hook subcommand (see runNotifyHook) that launched threads
+// invoke via `-c notify=[...]` to report turn-ended events, and status
+// derivation now also consults those events (loadTurnEndedByThread) rather
+// than tmux liveness alone.
 package main
 
 import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/dzungtr/codex-agents/internal/agentstate"
 	"github.com/dzungtr/codex-agents/internal/codexlaunch"
 	"github.com/dzungtr/codex-agents/internal/codexstate"
+	"github.com/dzungtr/codex-agents/internal/notifyhook"
 	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
 	"github.com/dzungtr/codex-agents/internal/ui"
 )
 
 func main() {
+	// Launched threads invoke this binary as their notify hook via `-c
+	// notify=[...]` (internal/notifyhook.WrapperArgs); dispatch to that
+	// mode before anything else tries to start the bubbletea program.
+	if len(os.Args) > 1 && os.Args[1] == notifyhook.Subcommand {
+		runNotifyHook(os.Args[2:])
+		return
+	}
+
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "codex-agents:", err)
 		os.Exit(1)
 	}
+}
+
+// runNotifyHook implements the hidden `codex-agents notify-hook ...`
+// subcommand codex invokes when a launched thread's turn ends. Per the PRD
+// #1 / issue #4 contract, this must never block or fail codex's own
+// turn-completion flow: failures go to stderr and the process still exits
+// 0, so a broken hook degrades the cockpit's status derivation (that
+// thread simply reads as StatusWorking whenever it's alive) instead of
+// disrupting the user's codex session.
+func runNotifyHook(args []string) {
+	threadID, eventsPath, forward, payload, err := notifyhook.ParseWrapperArgs(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "codex-agents notify-hook:", err)
+		return
+	}
+	statePath, err := agentstate.DefaultPath()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "codex-agents notify-hook: resolve state path:", err)
+		statePath = ""
+	}
+	notifyhook.Run(os.Stderr, notifyhook.ExecForwardRunner{}, statePath, threadID, eventsPath, forward, payload, time.Now().UTC())
 }
 
 func run() error {
@@ -47,9 +82,10 @@ func run() error {
 		Git:       codexlaunch.ExecGitRunner{},
 		Tmux:      tmuxstatus.ExecRunner{},
 		StatePath: statePath,
+		CodexHome: codexHome,
 	}
 
-	rows, err := loadRows(codexHome)
+	rows, err := loadRows(codexHome, statePath)
 	if err != nil {
 		return err
 	}
@@ -57,7 +93,7 @@ func run() error {
 	actions := ui.Actions{
 		Launch:  launchAction(launcher, startDir),
 		Attach:  attachAction(launcher),
-		Refresh: refreshAction(codexHome),
+		Refresh: refreshAction(codexHome, statePath),
 	}
 
 	_, err = tea.NewProgram(ui.New(rows).WithActions(actions), tea.WithAltScreen()).Run()
@@ -65,10 +101,11 @@ func run() error {
 }
 
 // loadRows loads codex's own thread records and merges in tmux-liveness
-// status, in the shape the ui package renders. It's the single place both
-// the initial load and the post-attach Refresh action go through, so the
-// two can never drift out of sync.
-func loadRows(codexHome string) ([]ui.Row, error) {
+// plus turn-event status (tmuxstatus.StatusFor's working/waiting/closed
+// derivation, PRD #1 / issue #4), in the shape the ui package renders. It's
+// the single place both the initial load and the post-attach Refresh
+// action go through, so the two can never drift out of sync.
+func loadRows(codexHome, statePath string) ([]ui.Row, error) {
 	result, err := codexstate.LoadThreads(codexHome)
 	if err != nil {
 		return nil, err
@@ -80,14 +117,37 @@ func loadRows(codexHome string) ([]ui.Row, error) {
 	}
 	liveSet := tmuxstatus.NewLiveSet(live)
 
+	turnEnded := loadTurnEndedByThread(statePath)
+
 	rows := make([]ui.Row, 0, len(result.Threads))
 	for _, t := range result.Threads {
 		rows = append(rows, ui.Row{
 			Thread: t,
-			Status: tmuxstatus.StatusFor(t.ID, liveSet),
+			Status: tmuxstatus.StatusFor(t.ID, liveSet, turnEnded[t.ID]),
 		})
 	}
 	return rows, nil
+}
+
+// loadTurnEndedByThread reads agentstate's state.json and reports, per
+// thread ID, whether its LastTurnEvent field is populated (i.e. the
+// notify-hook wrapper has recorded at least one turn-ended event for it —
+// internal/notifyhook is the producer). A load failure degrades to "no
+// events known" (every entry false) rather than erroring the whole list:
+// per the PRD's "hook unavailable -> degrade to open/closed" contract, a
+// corrupt or unreadable state.json must not stop the cockpit from showing
+// plain tmux-liveness status.
+func loadTurnEndedByThread(statePath string) map[string]bool {
+	st, err := agentstate.Load(statePath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "codex-agents: load state (degrading to tmux-liveness-only status):", err)
+		return map[string]bool{}
+	}
+	turnEnded := make(map[string]bool, len(st.Threads))
+	for id, entry := range st.Threads {
+		turnEnded[id] = entry.LastTurnEvent != ""
+	}
+	return turnEnded
 }
 
 // launchAction adapts codexlaunch.Launcher.Launch into a ui.Actions.Launch
@@ -113,7 +173,9 @@ func launchAction(launcher *codexlaunch.Launcher, startDir string) func(task, pr
 					// record; -1 is codexstate's "unknown" sentinel.
 					TokenCount: -1,
 				},
-				Status: tmuxstatus.StatusOpen,
+				// A freshly launched thread's turn is by definition still
+				// in progress: no turn-ended event exists for it yet.
+				Status: tmuxstatus.StatusWorking,
 			}}
 		}
 	}
@@ -152,10 +214,10 @@ func attachAction(launcher *codexlaunch.Launcher) func(row ui.Row) tea.Cmd {
 // refreshAction reloads the thread list, used after tmux detach returns
 // control to the cockpit ("a refreshed list", per PRD #1's List behavior
 // table).
-func refreshAction(codexHome string) func() tea.Cmd {
+func refreshAction(codexHome, statePath string) func() tea.Cmd {
 	return func() tea.Cmd {
 		return func() tea.Msg {
-			rows, err := loadRows(codexHome)
+			rows, err := loadRows(codexHome, statePath)
 			if err != nil {
 				return ui.ThreadLaunchErrorMsg{Err: err}
 			}

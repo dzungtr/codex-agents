@@ -126,6 +126,48 @@ func TestUpsert_LoadsModifiesAndSaves(t *testing.T) {
 	}
 }
 
+func TestUpdateLastTurnEvent_PreservesOtherFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	if err := Upsert(path, "thread-1", Entry{TmuxSession: "cxa-thread-1", Profile: "review", WorktreePath: "/repo/.worktrees/t1"}); err != nil {
+		t.Fatalf("seed Upsert: %v", err)
+	}
+
+	if err := UpdateLastTurnEvent(path, "thread-1", "turn-ended@2026-07-08T12:00:00Z"); err != nil {
+		t.Fatalf("UpdateLastTurnEvent: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	entry := got.Threads["thread-1"]
+	if entry.LastTurnEvent != "turn-ended@2026-07-08T12:00:00Z" {
+		t.Fatalf("LastTurnEvent = %q, want turn-ended@2026-07-08T12:00:00Z", entry.LastTurnEvent)
+	}
+	if entry.TmuxSession != "cxa-thread-1" || entry.Profile != "review" || entry.WorktreePath != "/repo/.worktrees/t1" {
+		t.Fatalf("expected other fields preserved, got %+v", entry)
+	}
+}
+
+func TestUpdateLastTurnEvent_CreatesEntryWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	if err := UpdateLastTurnEvent(path, "unknown-thread", "turn-ended@2026-07-08T12:00:00Z"); err != nil {
+		t.Fatalf("UpdateLastTurnEvent: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Threads["unknown-thread"].LastTurnEvent != "turn-ended@2026-07-08T12:00:00Z" {
+		t.Fatalf("expected a fresh entry with LastTurnEvent set, got %+v", got.Threads["unknown-thread"])
+	}
+}
+
 func TestDefaultPath_UnderCodexAgentsHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

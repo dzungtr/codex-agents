@@ -105,19 +105,29 @@ func TestComposer_EnterCallsLaunchWithTaskAndProfileThenCloses(t *testing.T) {
 	}
 }
 
-func TestUpdate_ThreadLaunchedMsg_InsertsRowAtTop(t *testing.T) {
+// TestUpdate_ThreadLaunchedMsg_InsertsRowAtTopOfWorkingGroup reflects issue
+// #4's ordering rule: a freshly launched thread is StatusWorking, so it
+// sorts above other working/closed rows (it's stamped with "now", the most
+// recent possible) but still *below* any StatusWaiting row — a working
+// thread never outranks one that's actually waiting on the user, per PRD
+// #1's List behavior -> Ordering row.
+func TestUpdate_ThreadLaunchedMsg_InsertsRowAtTopOfWorkingGroup(t *testing.T) {
 	m := newFixtureModel()
-	newRow := Row{Thread: codexstate.Thread{ID: "new1", Title: "Brand new thread"}, Status: tmuxstatus.StatusOpen}
+	newRow := Row{Thread: codexstate.Thread{ID: "new1", Title: "Brand new thread"}, Status: tmuxstatus.StatusWorking}
 	updated, _ := m.Update(ThreadLaunchedMsg{Row: newRow})
 	m = updated.(Model)
 	view := m.View()
 	if !strings.Contains(view, "Brand new thread") {
 		t.Fatalf("expected new row in view, got:\n%s", view)
 	}
-	idxNew := strings.Index(view, "Brand new thread")
-	idxOld := strings.Index(view, "Add dark mode")
-	if idxNew == -1 || idxOld == -1 || idxNew > idxOld {
-		t.Fatalf("expected new row to be at the top, view:\n%s", view)
+	idxWaiting := strings.Index(view, "Add dark mode")           // StatusWaiting: stays above
+	idxNew := strings.Index(view, "◐ Brand new thread")          // the row itself, not the "launched ..." status line above the list
+	idxOlderWorking := strings.Index(view, "◐ Refactor drainer") // StatusWorking, older
+	if idxWaiting == -1 || idxNew == -1 || idxOlderWorking == -1 {
+		t.Fatalf("expected all three titles in view, got:\n%s", view)
+	}
+	if !(idxWaiting < idxNew && idxNew < idxOlderWorking) {
+		t.Fatalf("expected order [waiting group, new working row, older working row], view:\n%s", view)
 	}
 }
 

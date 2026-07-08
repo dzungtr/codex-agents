@@ -1,11 +1,11 @@
-// Package tmuxstatus derives a codex thread's base open/closed status from
-// tmux session liveness. It knows nothing about codex's own data (that's
-// internal/codexstate) — only about the cxa-<thread-id-prefix> session
-// naming convention and how to ask tmux which sessions are alive.
-//
-// Slice #2 only needs open (session alive) vs closed (no session); the
-// working/waiting split is a later slice (PRD #1, #4) layered on top of
-// this liveness check via a notify-hook event feed.
+// Package tmuxstatus derives a codex thread's status from tmux session
+// liveness, plus (as of slice #4) whether its last known turn ended. It
+// knows nothing about codex's own data (that's internal/codexstate) or the
+// notify-hook event feed's shape (that's internal/notifyhook) — only about
+// the cxa-<thread-id-prefix> session naming convention, how to ask tmux
+// which sessions are alive, and the plain derivation matrix (PRD #1 / issue
+// #4): tmux alive + turn in progress = working; tmux alive + turn ended =
+// waiting; no tmux session = closed, regardless of any stale event history.
 package tmuxstatus
 
 import (
@@ -34,21 +34,33 @@ func SessionName(threadID string) string {
 	return sessionPrefix + threadID[:n]
 }
 
-// Status is a thread's liveness-derived state.
+// Status is a thread's liveness+turn-event-derived state, per PRD #1's List
+// behavior -> Statuses row.
 type Status int
 
 const (
-	// StatusClosed means no tmux session is alive for the thread.
+	// StatusClosed means no tmux session is alive for the thread. This
+	// always wins over any turn-event history: a dead session can't be
+	// "waiting" on anything.
 	StatusClosed Status = iota
-	// StatusOpen means the thread's tmux session is alive.
-	StatusOpen
+	// StatusWorking means the thread's tmux session is alive and its last
+	// known turn is still in progress (no turn-ended event seen, or none
+	// available — see StatusFor's degraded-mode note).
+	StatusWorking
+	// StatusWaiting means the thread's tmux session is alive and its last
+	// turn ended, so it needs user input.
+	StatusWaiting
 )
 
 func (s Status) String() string {
-	if s == StatusOpen {
-		return "open"
+	switch s {
+	case StatusWorking:
+		return "working"
+	case StatusWaiting:
+		return "waiting"
+	default:
+		return "closed"
 	}
-	return "closed"
 }
 
 // Lister lists the names of currently-alive tmux sessions. Production code
@@ -105,10 +117,23 @@ func NewLiveSet(names []string) LiveSet {
 	return set
 }
 
-// StatusFor derives a thread's status from its ID and the current live set.
-func StatusFor(threadID string, live LiveSet) Status {
-	if _, ok := live[SessionName(threadID)]; ok {
-		return StatusOpen
+// StatusFor derives a thread's status from its ID, the current live tmux
+// session set, and turnEnded — whether the notify-hook event feed's latest
+// record for this thread says its last turn ended (internal/notifyhook is
+// the producer; callers pass false when no event has ever been recorded,
+// which is also exactly what "hook unavailable" degrades to: every alive
+// thread reads as StatusWorking, i.e. plain open/closed with a "working"
+// label, per PRD #1's Launch semantics -> Status hook row).
+//
+// A dead tmux session is always StatusClosed regardless of turnEnded: stale
+// event history from a session that's since been killed must not read as
+// "waiting".
+func StatusFor(threadID string, live LiveSet, turnEnded bool) Status {
+	if _, ok := live[SessionName(threadID)]; !ok {
+		return StatusClosed
 	}
-	return StatusClosed
+	if turnEnded {
+		return StatusWaiting
+	}
+	return StatusWorking
 }

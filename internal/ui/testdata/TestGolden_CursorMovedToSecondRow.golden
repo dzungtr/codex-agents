@@ -1,7 +1,7 @@
-3 threads · 2 open
+3 threads · 1 waiting · 1 working
 
   ● Add dark mode                              web-app · add-dark-mode         3m
-› ● Refactor drainer                           infra-drainer · refactor-d…    45m
+› ◐ Refactor drainer                           infra-drainer · refactor-d…    45m
     model: gpt-5-codex  profile: -  tokens: -  cwd: /Users/tony/infra-drainer
   ○ Fix auth hook                              web-app · fix-auth-hook         1d
 
