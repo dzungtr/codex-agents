@@ -46,6 +46,17 @@ type Model struct {
 	composerTask       string
 	composerProfileIdx int
 
+	// replyFocused, replyText and replyThreadID hold the quick-reply
+	// input's state while the user is typing a one-line reply to an alive
+	// (waiting or working) thread (`r` to focus; PRD #1's List behavior ->
+	// Quick reply row / issue #6). replyThreadID is captured at focus time
+	// rather than re-derived from the cursor at submit time, since the
+	// cursor can't move while this input is focused anyway (handleKey
+	// routes all keys to handleReplyKey instead).
+	replyFocused  bool
+	replyText     string
+	replyThreadID string
+
 	// statusLine is a transient success/error line surfaced by the last
 	// Launch or Attach action, shown under the header until the next one.
 	statusLine string
@@ -153,6 +164,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.actions.Refresh()
 		}
 		return m, nil
+	case QuickReplySentMsg:
+		// Refresh (like AttachDoneMsg) rather than optimistically flipping
+		// the row's status locally: the reply was fired-and-forgotten via
+		// tmux send-keys, so the authoritative status still comes from
+		// reloading tmux liveness + agentstate (QuickReply already cleared
+		// last_turn_event, so the reload should read the row as working).
+		m.statusLine = "sent reply"
+		if m.actions.Refresh != nil {
+			return m, m.actions.Refresh()
+		}
+		return m, nil
 	case RowsRefreshedMsg:
 		m.rows = append([]Row(nil), msg.Rows...)
 		sortRows(m.rows)
@@ -173,6 +195,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.composerFocused {
 		return m.handleComposerKey(msg)
+	}
+
+	if m.replyFocused {
+		return m.handleReplyKey(msg)
 	}
 
 	if m.filtering {
@@ -215,6 +241,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.composerTask = ""
 		m.composerProfileIdx = 0
 		m.statusLine = ""
+	case "r":
+		// Quick reply (PRD #1's List behavior -> Quick reply row / issue
+		// #6): only meaningful for alive threads — no-op on a closed row,
+		// per the acceptance criteria.
+		if len(m.visible) > 0 {
+			row := m.rows[m.visible[m.cursor]]
+			if row.Status != tmuxstatus.StatusClosed {
+				m.replyFocused = true
+				m.replyText = ""
+				m.replyThreadID = row.Thread.ID
+				m.statusLine = ""
+			}
+		}
 	case "enter":
 		if len(m.visible) > 0 && m.actions.Attach != nil {
 			row := m.rows[m.visible[m.cursor]]

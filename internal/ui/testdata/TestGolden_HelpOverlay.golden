@@ -3,6 +3,7 @@ Keyboard shortcuts
   ↑ ↓ / j k   move selection
   enter       attach alive thread / resume closed thread
   i           focus composer (@ swap profile, enter launch, esc cancel)
+  r           quick-reply to the selected alive thread (enter send, esc cancel)
   /           filter by title, repo, branch
   ?           toggle this help
   q / ctrl+c  quit

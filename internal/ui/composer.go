@@ -29,6 +29,15 @@ type Actions struct {
 	// list", per PRD #1's List behavior table). Returns a Cmd that yields
 	// RowsRefreshedMsg.
 	Refresh func() tea.Cmd
+
+	// QuickReply delivers a one-line reply into threadID's codex composer
+	// (PRD #1's List behavior -> Quick reply row / issue #6). The ui
+	// package has already excluded closed threads before calling this (see
+	// handleKey's "r" case). Returns a Cmd that eventually yields
+	// QuickReplySentMsg (success) or ThreadLaunchErrorMsg (failure) — the
+	// same generic error message Attach/Launch failures already surface as
+	// a transient status line.
+	QuickReply func(threadID, text string) tea.Cmd
 }
 
 // ThreadLaunchedMsg reports a successful composer launch. Row is inserted
@@ -47,6 +56,11 @@ type AttachDoneMsg struct{}
 // RowsRefreshedMsg carries a freshly reloaded row set that replaces the
 // model's current rows outright.
 type RowsRefreshedMsg struct{ Rows []Row }
+
+// QuickReplySentMsg reports that a quick-reply's tmux send-keys delivery
+// completed (fire-and-forget per the PRD's cheap-path mandate — this is not
+// a delivery confirmation, just "the tmux commands didn't error").
+type QuickReplySentMsg struct{ ThreadID string }
 
 // composerProfiles is the fixed profile cycle offered by the composer's
 // `@` key, per PRD #1's Launch semantics table (each corresponds to
