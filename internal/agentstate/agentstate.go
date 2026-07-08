@@ -117,3 +117,29 @@ func Upsert(path, threadID string, entry Entry) error {
 	st.Threads[threadID] = entry
 	return Save(path, st)
 }
+
+// UpdateLastTurnEvent loads path, sets threadID's LastTurnEvent to event
+// (preserving its other fields — TmuxSession/Profile/WorktreePath — since
+// the notify hook fires long after Launch/Resume already populated them),
+// and saves it back. This is the write side of the Statuses slice (PRD #1 /
+// issue #4): internal/notifyhook's wrapper calls this on every turn-ended
+// event so the cockpit's status derivation can read it back without
+// re-deriving anything from codex's own data.
+//
+// A threadID with no prior entry gets a fresh one with only LastTurnEvent
+// set, rather than erroring: a hook firing for a thread state.json doesn't
+// know about yet (e.g. a plain-terminal session using a stray inherited
+// notify config) shouldn't be treated as a failure.
+func UpdateLastTurnEvent(path, threadID, event string) error {
+	st, err := Load(path)
+	if err != nil {
+		return err
+	}
+	if st.Threads == nil {
+		st.Threads = map[string]Entry{}
+	}
+	entry := st.Threads[threadID]
+	entry.LastTurnEvent = event
+	st.Threads[threadID] = entry
+	return Save(path, st)
+}

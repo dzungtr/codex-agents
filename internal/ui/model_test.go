@@ -15,9 +15,12 @@ func fixedNow() time.Time {
 	return time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
 }
 
-// fixtureRows returns rows pre-sorted most-recent-first, as LoadThreads
-// would hand them to main.go: newest ("Add dark mode") first, then
-// "Refactor drainer", then "Fix auth hook".
+// fixtureRows returns rows covering all three statuses, in the order New's
+// grouping+recency sort should already produce them: "Add dark mode"
+// (waiting) first — it's both the most attention-worthy status group *and*
+// the most recent thread, so ordering assertions further down don't need
+// to distinguish which rule put it there — then "Refactor drainer"
+// (working), then "Fix auth hook" (closed).
 func fixtureRows() []Row {
 	base := fixedNow()
 	return []Row{
@@ -27,7 +30,7 @@ func fixtureRows() []Row {
 				Model: "gpt-5-codex", GitBranch: "add-dark-mode",
 				Recency: base.Add(-3 * time.Minute), Profile: "general-agentic", TokenCount: 8200,
 			},
-			Status: tmuxstatus.StatusOpen,
+			Status: tmuxstatus.StatusWaiting,
 		},
 		{
 			Thread: codexstate.Thread{
@@ -35,7 +38,7 @@ func fixtureRows() []Row {
 				Model: "gpt-5-codex", GitBranch: "refactor-drainer",
 				Recency: base.Add(-45 * time.Minute), TokenCount: -1,
 			},
-			Status: tmuxstatus.StatusOpen,
+			Status: tmuxstatus.StatusWorking,
 		},
 		{
 			Thread: codexstate.Thread{
@@ -64,6 +67,36 @@ func TestModel_InitialView_OrdersRowsMostRecentFirstAndSelectsFirst(t *testing.T
 	}
 	if !(idxDark < idxDrainer && idxDrainer < idxAuth) {
 		t.Fatalf("expected order [dark mode, drainer, auth hook], view was:\n%s", view)
+	}
+}
+
+// TestNew_OrdersByStatusGroupThenRecency feeds New() rows in a
+// deliberately scrambled order (closed-but-newest first) and checks it
+// re-sorts them per PRD #1's List behavior -> Ordering row: status groups
+// waiting -> working -> closed, most-recent first within each group. This
+// is the core of issue #4's ordering requirement — fixtureRows above
+// happens to already be in the right order, so this test is the one that
+// actually exercises sortRows rather than relying on already-sorted input.
+func TestNew_OrdersByStatusGroupThenRecency(t *testing.T) {
+	base := fixedNow()
+	rows := []Row{
+		{Thread: codexstate.Thread{ID: "c", Title: "Closed but newest", Recency: base}, Status: tmuxstatus.StatusClosed},
+		{Thread: codexstate.Thread{ID: "w", Title: "Working middle", Recency: base.Add(-10 * time.Minute)}, Status: tmuxstatus.StatusWorking},
+		{Thread: codexstate.Thread{ID: "a1", Title: "Waiting older", Recency: base.Add(-1 * time.Hour)}, Status: tmuxstatus.StatusWaiting},
+		{Thread: codexstate.Thread{ID: "a2", Title: "Waiting newer", Recency: base.Add(-5 * time.Minute)}, Status: tmuxstatus.StatusWaiting},
+	}
+	m := New(rows).WithClock(fixedNow)
+	view := m.View()
+
+	idxNewer := strings.Index(view, "Waiting newer")
+	idxOlder := strings.Index(view, "Waiting older")
+	idxWorking := strings.Index(view, "Working middle")
+	idxClosed := strings.Index(view, "Closed but newest")
+	if idxNewer == -1 || idxOlder == -1 || idxWorking == -1 || idxClosed == -1 {
+		t.Fatalf("expected all titles present, got:\n%s", view)
+	}
+	if !(idxNewer < idxOlder && idxOlder < idxWorking && idxWorking < idxClosed) {
+		t.Fatalf("expected order [waiting newer, waiting older, working, closed] regardless of input order, got:\n%s", view)
 	}
 }
 
@@ -99,7 +132,7 @@ func TestModel_Navigation_JKAndArrowsMoveCursorAndClamp(t *testing.T) {
 	}
 
 	m = move(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	if !strings.Contains(m.View(), "› ● Refactor drainer") {
+	if !strings.Contains(m.View(), "› ◐ Refactor drainer") {
 		t.Fatalf("expected cursor on 'Refactor drainer' after j, got:\n%s", m.View())
 	}
 

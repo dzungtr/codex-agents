@@ -3,9 +3,11 @@ package codexlaunch
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dzungtr/codex-agents/internal/agentstate"
+	"github.com/dzungtr/codex-agents/internal/notifyhook"
 	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
 )
 
@@ -37,12 +39,18 @@ func newTestLauncher(t *testing.T, git GitRunner, tmux tmuxstatus.Runner, ids []
 		Tmux:        tmux,
 		StatePath:   statePath,
 		NewThreadID: next,
+		// A deterministic, no-lookup executable path keeps tmux call
+		// assertions stable across machines/CI (os.Executable() would
+		// otherwise vary); CodexHome is left empty, meaning
+		// ExistingNotifyCommand always returns nil, so notify wrapper args
+		// never include a forward command unless a test opts in.
+		ExecutablePath: func() (string, error) { return "/opt/codex-agents/codex-agents", nil },
 	}, statePath
 }
 
 func TestLaunch_GitRepo_CreatesWorktreeAndTmuxSessionAndState(t *testing.T) {
 	git := &fakeGitRunner{responses: map[string]fakeGitResponse{
-		"[rev-parse --show-toplevel]":                          {out: "/repo\n"},
+		"[rev-parse --show-toplevel]":                           {out: "/repo\n"},
 		"[rev-parse --verify --quiet refs/heads/fix-auth-hook]": {err: fmt.Errorf("exit 1")},
 	}}
 	tmux := &fakeTmuxRunner{}
@@ -72,7 +80,9 @@ func TestLaunch_GitRepo_CreatesWorktreeAndTmuxSessionAndState(t *testing.T) {
 		t.Fatalf("expected exactly one tmux call, got %v", tmux.calls)
 	}
 	got := tmux.calls[0]
-	want := tmuxstatus.NewSessionArgs(wantSession, wantDir, []string{"codex", "-p", "general-agentic", "Fix auth hook"})
+	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", res.ThreadID, notifyhook.DefaultEventsPath(statePath), nil)
+	wantCodexArgs := NewThreadArgs(NewThreadSpec{Profile: "general-agentic", Task: "Fix auth hook", Notify: wantNotify})
+	want := tmuxstatus.NewSessionArgs(wantSession, wantDir, wantCodexArgs)
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("tmux call = %v, want %v", got, want)
 	}
@@ -109,6 +119,48 @@ func TestLaunch_DefaultsProfileWhenUnset(t *testing.T) {
 	}
 	if res.WorktreePath != "/plain" {
 		t.Errorf("WorktreePath = %q, want /plain (run in place)", res.WorktreePath)
+	}
+}
+
+func TestLaunch_ChainsExistingNotifyCommandFromProfileConfig(t *testing.T) {
+	git := &fakeGitRunner{responses: map[string]fakeGitResponse{
+		"[rev-parse --show-toplevel]": {err: fmt.Errorf("not a repo")},
+	}}
+	tmux := &fakeTmuxRunner{}
+	l, statePath := newTestLauncher(t, git, tmux, []string{"threadid1"})
+	l.CodexHome = t.TempDir()
+	writeConfig(t, l.CodexHome, "general-agentic", `notify = ["/usr/bin/terminal-notifier", "-title", "codex"]`+"\n")
+
+	res, err := l.Launch(LaunchRequest{StartDir: "/plain", Task: "do a thing", Profile: "general-agentic"})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", res.ThreadID, notifyhook.DefaultEventsPath(statePath), []string{"/usr/bin/terminal-notifier", "-title", "codex"})
+	wantCodexArgs := NewThreadArgs(NewThreadSpec{Profile: "general-agentic", Task: "do a thing", Notify: wantNotify})
+	want := tmuxstatus.NewSessionArgs(tmuxstatus.SessionName(res.ThreadID), "/plain", wantCodexArgs)
+	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {
+		t.Errorf("tmux call = %v, want %v (expected the profile's existing notify command chained in)", tmux.calls[0], want)
+	}
+}
+
+func TestLaunch_ExecutablePathFailure_OmitsNotifyHookInsteadOfFailing(t *testing.T) {
+	git := &fakeGitRunner{responses: map[string]fakeGitResponse{
+		"[rev-parse --show-toplevel]": {err: fmt.Errorf("not a repo")},
+	}}
+	tmux := &fakeTmuxRunner{}
+	l, _ := newTestLauncher(t, git, tmux, []string{"threadid1"})
+	l.ExecutablePath = func() (string, error) { return "", fmt.Errorf("boom: can't resolve self") }
+
+	if _, err := l.Launch(LaunchRequest{StartDir: "/plain", Task: "do a thing"}); err != nil {
+		t.Fatalf("expected Launch to degrade gracefully rather than fail, got: %v", err)
+	}
+
+	got := tmux.calls[0]
+	for i, a := range got {
+		if a == "-c" && i+1 < len(got) && strings.HasPrefix(got[i+1], "notify=") {
+			t.Fatalf("expected no notify flag when executable path resolution fails, got %v", got)
+		}
 	}
 }
 

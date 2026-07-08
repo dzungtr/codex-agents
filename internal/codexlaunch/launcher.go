@@ -2,10 +2,12 @@ package codexlaunch
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/google/uuid"
 
 	"github.com/dzungtr/codex-agents/internal/agentstate"
+	"github.com/dzungtr/codex-agents/internal/notifyhook"
 	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
 )
 
@@ -24,6 +26,17 @@ type Launcher struct {
 	// tmux session (cxa-<prefix>) and key state.json. Defaults to a
 	// random UUID; tests override for determinism.
 	NewThreadID func() string
+	// CodexHome is $CODEX_HOME (or its ~/.codex default), used to look up
+	// an existing notify command from the chosen profile's config.toml so
+	// the notify wrapper can forward to it (PRD #1 / issue #4). Empty
+	// skips the lookup — the wrapper then only records turn-ended events.
+	CodexHome string
+	// ExecutablePath resolves the codex-agents binary's own path, used to
+	// configure it as codex's notify hook (re-invoked in hook mode; see
+	// internal/notifyhook). Defaults to os.Executable; tests override for
+	// determinism. If resolution fails, Launch degrades gracefully by
+	// omitting the notify hook entirely rather than failing the launch.
+	ExecutablePath func() (string, error)
 }
 
 func (l *Launcher) newThreadID() string {
@@ -31,6 +44,28 @@ func (l *Launcher) newThreadID() string {
 		return l.NewThreadID()
 	}
 	return uuid.NewString()
+}
+
+func (l *Launcher) executablePath() (string, error) {
+	if l.ExecutablePath != nil {
+		return l.ExecutablePath()
+	}
+	return os.Executable()
+}
+
+// notifyArgsFor builds the `-c notify=[...]` argv for a freshly launched
+// thread, or nil if the wrapper can't be configured (e.g. the cockpit's own
+// executable path can't be resolved). This is the "hook unavailable ->
+// degrade to open/closed" contract from the PRD: a launch never fails just
+// because notify-hook setup couldn't be completed.
+func (l *Launcher) notifyArgsFor(threadID, profile string) []string {
+	exePath, err := l.executablePath()
+	if err != nil {
+		return nil
+	}
+	forward := ExistingNotifyCommand(l.CodexHome, profile)
+	eventsPath := notifyhook.DefaultEventsPath(l.StatePath)
+	return notifyhook.WrapperArgs(exePath, threadID, eventsPath, forward)
 }
 
 // LaunchRequest is a composer submission: a task description plus the
@@ -72,7 +107,8 @@ func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 
 	threadID := l.newThreadID()
 	session := tmuxstatus.SessionName(threadID)
-	codexArgs := NewThreadArgs(NewThreadSpec{Profile: profile, Model: req.Model, Task: req.Task})
+	notifyArgs := l.notifyArgsFor(threadID, profile)
+	codexArgs := NewThreadArgs(NewThreadSpec{Profile: profile, Model: req.Model, Task: req.Task, Notify: notifyArgs})
 	tmuxArgs := tmuxstatus.NewSessionArgs(session, ws.WorkDir, codexArgs)
 
 	if err := l.Tmux.Run(tmuxArgs); err != nil {
@@ -110,6 +146,12 @@ func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 // launch that has since closed), its profile is preserved; otherwise
 // Profile is left empty ("unknown", consistent with codexstate's own
 // best-effort semantics).
+//
+// Resume does not chain the notify-hook wrapper (issue #4's Status hook is
+// scoped to "launched threads" per the PRD): a resumed thread's status
+// derivation degrades to plain tmux-liveness (StatusWorking while alive)
+// unless an earlier Launch of the same thread ID already left a recorded
+// event behind.
 func (l *Launcher) Resume(threadID, cwd string) (LaunchResult, error) {
 	session := tmuxstatus.SessionName(threadID)
 	tmuxArgs := tmuxstatus.NewSessionArgs(session, cwd, ResumeArgs(threadID))

@@ -1,12 +1,16 @@
 // Package ui implements the read-only codex thread list screen: a
 // bubbletea model over rows produced by internal/codexstate (thread data)
-// and internal/tmuxstatus (open/closed liveness). It renders per the style
-// contract in Codex-Orchestrator-TUI/index.html, adapted to a terminal
-// list: status dot, title, repo·branch, age, a detail line on the selected
-// row, a `/` filter, and a `?` help overlay.
+// and internal/tmuxstatus (working/waiting/closed status). It renders per
+// the style contract in Codex-Orchestrator-TUI/index.html, adapted to a
+// terminal list: status dot, title, repo·branch, age, a detail line on the
+// selected row, a `/` filter, and a `?` help overlay. It also owns the list
+// ordering rule (PRD #1's List behavior -> Ordering row): status groups
+// waiting -> working -> closed, most-recent first within each — see New
+// and sortRows.
 package ui
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -16,8 +20,8 @@ import (
 	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
 )
 
-// Row is a single list entry: a codex thread plus its liveness-derived
-// open/closed status.
+// Row is a single list entry: a codex thread plus its derived
+// working/waiting/closed status (tmuxstatus.StatusFor).
 type Row struct {
 	Thread codexstate.Thread
 	Status tmuxstatus.Status
@@ -56,11 +60,44 @@ type Model struct {
 	now func() time.Time // injectable clock; tests override for deterministic "age" rendering
 }
 
-// New builds a list Model from rows already ordered most-recent-first.
+// New builds a list Model from rows in any order: New itself applies the
+// PRD #1 List behavior -> Ordering rule (status groups waiting -> working
+// -> closed, most-recent first within each group), so callers (main.go's
+// loadRows, and this package's own Update handlers below) never need to
+// pre-sort.
 func New(rows []Row) Model {
-	m := Model{rows: rows, now: time.Now}
+	sorted := append([]Row(nil), rows...)
+	sortRows(sorted)
+	m := Model{rows: sorted, now: time.Now}
 	m.applyFilter()
 	return m
+}
+
+// statusGroupRank orders status groups per PRD #1's List behavior ->
+// Ordering row: waiting (needs you) first, then working, then closed last.
+func statusGroupRank(s tmuxstatus.Status) int {
+	switch s {
+	case tmuxstatus.StatusWaiting:
+		return 0
+	case tmuxstatus.StatusWorking:
+		return 1
+	default: // tmuxstatus.StatusClosed
+		return 2
+	}
+}
+
+// sortRows orders rows in place by status group, then most-recent-first
+// within each group. A stable sort is used so rows with identical recency
+// (e.g. zero-value Recency on records the caller hasn't enriched) keep a
+// deterministic relative order across calls instead of shuffling.
+func sortRows(rows []Row) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		ri, rj := statusGroupRank(rows[i].Status), statusGroupRank(rows[j].Status)
+		if ri != rj {
+			return ri < rj
+		}
+		return rows[i].Thread.Recency.After(rows[j].Thread.Recency)
+	})
 }
 
 // WithClock overrides the model's clock. Intended for tests that need
@@ -92,10 +129,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	case ThreadLaunchedMsg:
-		m.rows = append([]Row{msg.Row}, m.rows...)
+		row := msg.Row
+		// A freshly launched thread has no Recency of its own (main.go's
+		// launchAction doesn't know it — codex hasn't written a thread
+		// record yet); stamp it with "now" so it sorts to the top of its
+		// status group instead of the bottom (a zero-value time.Time reads
+		// as infinitely old).
+		if row.Thread.Recency.IsZero() {
+			row.Thread.Recency = m.now()
+		}
+		m.rows = append(m.rows, row)
+		sortRows(m.rows)
 		m.applyFilter()
-		m.cursor = 0
-		m.statusLine = "launched " + msg.Row.Thread.Title
+		m.selectThreadID(row.Thread.ID)
+		m.statusLine = "launched " + row.Thread.Title
 		return m, nil
 	case ThreadLaunchErrorMsg:
 		m.statusLine = "error: " + msg.Err.Error()
@@ -107,7 +154,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case RowsRefreshedMsg:
-		m.rows = msg.Rows
+		m.rows = append([]Row(nil), msg.Rows...)
+		sortRows(m.rows)
 		m.applyFilter()
 		return m, nil
 	}
@@ -201,6 +249,19 @@ func matchesQuery(r Row, query string) bool {
 	return strings.Contains(strings.ToLower(r.Thread.Title), query) ||
 		strings.Contains(strings.ToLower(r.Thread.Repo()), query) ||
 		strings.Contains(strings.ToLower(r.Thread.GitBranch), query)
+}
+
+// selectThreadID moves the cursor to threadID's row within the current
+// visible set, if present. Used after inserting a freshly launched thread
+// so the cursor follows it even though its position (top of its status
+// group, not necessarily top of the whole list) depends on sortRows.
+func (m *Model) selectThreadID(threadID string) {
+	for vi, idx := range m.visible {
+		if m.rows[idx].Thread.ID == threadID {
+			m.cursor = vi
+			return
+		}
+	}
 }
 
 func (m *Model) moveCursor(delta int) {

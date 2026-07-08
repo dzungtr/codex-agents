@@ -10,15 +10,29 @@ import (
 	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
 )
 
+// Status dot glyphs, per the style contract's status-dot styling
+// (Codex-Orchestrator-TUI/index.html): distinct glyphs so the three states
+// are still distinguishable in a colorless terminal, not just by color.
+// waiting uses the same filled dot the old two-state "open" status used, so
+// it reads as "the alive state that most wants your attention"; working
+// uses a half-fill to suggest "in progress"; closed stays hollow.
+//
+// The style contract calls for a pulsing animation on alive rows; this
+// static render doesn't attempt that (no continuous re-render loop exists
+// to drive it) — color/glyph differentiation carries the same signal here.
 const (
-	dotOpen   = "●"
-	dotClosed = "○"
+	dotWaiting = "●"
+	dotWorking = "◐"
+	dotClosed  = "○"
 )
 
 var (
-	selectedStyle = lipgloss.NewStyle().Reverse(true)
-	detailStyle   = lipgloss.NewStyle().Faint(true)
-	helpKeyStyle  = lipgloss.NewStyle().Bold(true)
+	selectedStyle   = lipgloss.NewStyle().Reverse(true)
+	detailStyle     = lipgloss.NewStyle().Faint(true)
+	helpKeyStyle    = lipgloss.NewStyle().Bold(true)
+	waitingDotStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	workingDotStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
+	closedDotStyle  = lipgloss.NewStyle().Faint(true)
 )
 
 func (m Model) View() string {
@@ -40,7 +54,9 @@ func (m Model) View() string {
 
 // headerLine shows the composer prompt while focused, the filter prompt
 // while filtering, otherwise a summary of total threads and how many are
-// currently open.
+// waiting/working (PRD #1's List behavior -> Statuses row: these are the
+// two "alive" states; closed threads aren't attention-worthy so they're
+// left out of the summary the same way the old open/closed count was).
 func (m Model) headerLine() string {
 	if m.composerFocused {
 		return fmt.Sprintf("> %s_  [profile: %s]  (@ cycle profile · enter launch · esc cancel)", m.composerTask, m.composerProfile())
@@ -49,17 +65,20 @@ func (m Model) headerLine() string {
 		return "/" + m.filterQuery
 	}
 	total := len(m.rows)
-	open := 0
+	waiting, working := 0, 0
 	for _, r := range m.rows {
-		if r.Status == tmuxstatus.StatusOpen {
-			open++
+		switch r.Status {
+		case tmuxstatus.StatusWaiting:
+			waiting++
+		case tmuxstatus.StatusWorking:
+			working++
 		}
 	}
 	noun := "threads"
 	if total == 1 {
 		noun = "thread"
 	}
-	return fmt.Sprintf("%d %s · %d open", total, noun, open)
+	return fmt.Sprintf("%d %s · %d waiting · %d working", total, noun, waiting, working)
 }
 
 func (m Model) listView() string {
@@ -87,17 +106,27 @@ func (m Model) listView() string {
 	return b.String()
 }
 
-func renderRow(r Row, selected bool, now time.Time) string {
-	dot := dotClosed
-	if r.Status == tmuxstatus.StatusOpen {
-		dot = dotOpen
+// statusDot renders the status-dot glyph for r.Status, styled per the
+// style contract (see the dot glyph constants' doc comment for why a
+// static render can't reproduce the "pulse for alive" animation).
+func statusDot(s tmuxstatus.Status) string {
+	switch s {
+	case tmuxstatus.StatusWaiting:
+		return waitingDotStyle.Render(dotWaiting)
+	case tmuxstatus.StatusWorking:
+		return workingDotStyle.Render(dotWorking)
+	default:
+		return closedDotStyle.Render(dotClosed)
 	}
+}
+
+func renderRow(r Row, selected bool, now time.Time) string {
 	cursor := "  "
 	if selected {
 		cursor = "› "
 	}
 	meta := fmt.Sprintf("%s · %s", r.Thread.Repo(), r.Thread.GitBranch)
-	line := fmt.Sprintf("%s%s %-42s %-28s %5s", cursor, dot, truncate(r.Thread.Title, 42), truncate(meta, 28), ageString(now, r.Thread.Recency))
+	line := fmt.Sprintf("%s%s %-42s %-28s %5s", cursor, statusDot(r.Status), truncate(r.Thread.Title, 42), truncate(meta, 28), ageString(now, r.Thread.Recency))
 	if selected {
 		return selectedStyle.Render(line)
 	}
