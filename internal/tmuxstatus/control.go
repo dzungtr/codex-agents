@@ -53,6 +53,27 @@ func SendEnterArgs(session string) []string {
 	return []string{"send-keys", "-t", session, "Enter"}
 }
 
+// InterruptArgs builds the argument list for `tmux send-keys -t <session>
+// C-c`: the interrupt sequence used by the Interrupt (`x`) list action
+// (PRD #1's List behavior -> Interrupt row) to stop a thread's current turn
+// without killing its session. Whether that transition actually lands as
+// StatusWaiting is decided by whoever calls this (cmd/codex-agents) in
+// concert with agentstate's last-turn-event bookkeeping — this function is
+// pure tmux-argument-building knowledge, same layering as NewSessionArgs.
+func InterruptArgs(session string) []string {
+	return []string{"send-keys", "-t", session, "C-c"}
+}
+
+// KillSessionArgs builds the argument list for `tmux kill-session -t
+// <session>`, used by the Archive (`a`) list action to hard-stop a thread's
+// tmux session. Unlike Interrupt, which only stops the in-progress turn,
+// this ends the session outright — archiving is the only action allowed to
+// do that (PRD #1's List behavior -> Interrupt row: "No hard-kill outside
+// archive").
+func KillSessionArgs(session string) []string {
+	return []string{"kill-session", "-t", session}
+}
+
 // Runner executes a tmux subcommand given its argument list (as built by
 // NewSessionArgs/AttachArgs/SwitchClientArgs). Production code uses
 // ExecRunner; tests inject a fake so launch/attach orchestration can be

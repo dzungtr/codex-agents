@@ -168,6 +168,48 @@ func TestUpdateLastTurnEvent_CreatesEntryWhenMissing(t *testing.T) {
 	}
 }
 
+func TestMarkHidden_PreservesOtherFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	if err := Upsert(path, "thread-1", Entry{TmuxSession: "cxa-thread-1", Profile: "review", WorktreePath: "/repo/.worktrees/t1"}); err != nil {
+		t.Fatalf("seed Upsert: %v", err)
+	}
+
+	if err := MarkHidden(path, "thread-1"); err != nil {
+		t.Fatalf("MarkHidden: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	entry := got.Threads["thread-1"]
+	if !entry.Hidden {
+		t.Fatalf("expected Hidden=true, got %+v", entry)
+	}
+	if entry.TmuxSession != "cxa-thread-1" || entry.Profile != "review" || entry.WorktreePath != "/repo/.worktrees/t1" {
+		t.Fatalf("expected other fields preserved, got %+v", entry)
+	}
+}
+
+func TestMarkHidden_CreatesEntryWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	if err := MarkHidden(path, "unknown-thread"); err != nil {
+		t.Fatalf("MarkHidden: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !got.Threads["unknown-thread"].Hidden {
+		t.Fatalf("expected a fresh hidden entry, got %+v", got.Threads["unknown-thread"])
+	}
+}
+
 func TestDefaultPath_UnderCodexAgentsHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

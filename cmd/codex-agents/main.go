@@ -24,7 +24,17 @@ import (
 	"github.com/dzungtr/codex-agents/internal/notifyhook"
 	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
 	"github.com/dzungtr/codex-agents/internal/ui"
+	"github.com/dzungtr/codex-agents/internal/worktreesafety"
 )
+
+// defaultBaseBranch is the branch worktreesafety.Check compares an
+// unpushed thread's worktree against when it has no upstream tracking
+// branch configured (PRD #1's Archive row: "unpushed/unmerged commits
+// relative to its upstream or main"). If a repo's default branch isn't
+// actually named "main", Check's own missing-base-branch handling refuses
+// removal with a clear reason rather than guessing wrong and deleting
+// unmerged work.
+const defaultBaseBranch = "main"
 
 func main() {
 	// Launched threads invoke this binary as their notify hook via `-c
@@ -95,6 +105,8 @@ func run() error {
 		Attach:     attachAction(launcher),
 		Refresh:    refreshAction(codexHome, statePath),
 		QuickReply: quickReplyAction(launcher),
+		Interrupt:  interruptAction(launcher.Tmux, statePath),
+		Archive:    archiveAction(launcher, statePath),
 	}
 
 	_, err = tea.NewProgram(ui.New(rows).WithActions(actions), tea.WithAltScreen()).Run()
@@ -119,15 +131,43 @@ func loadRows(codexHome, statePath string) ([]ui.Row, error) {
 	liveSet := tmuxstatus.NewLiveSet(live)
 
 	turnEnded := loadTurnEndedByThread(statePath)
+	hidden := loadHiddenByThread(statePath)
 
 	rows := make([]ui.Row, 0, len(result.Threads))
 	for _, t := range result.Threads {
+		// Archived (issue #5) threads are hidden in the cockpit's own
+		// state rather than codex's (codexstate opens codex's sqlite
+		// read-only and exposes no archive write path); filtering them
+		// out here is what makes "archived rows disappear from the list"
+		// hold after a refresh, not just immediately after ArchiveDoneMsg.
+		if hidden[t.ID] {
+			continue
+		}
 		rows = append(rows, ui.Row{
 			Thread: t,
 			Status: tmuxstatus.StatusFor(t.ID, liveSet, turnEnded[t.ID]),
 		})
 	}
 	return rows, nil
+}
+
+// loadHiddenByThread reads agentstate's state.json and reports, per thread
+// ID, whether it has been archived from the cockpit's own bookkeeping
+// (agentstate.Entry.Hidden, set by the Archive (`a`) action — see
+// archiveAction). A load failure degrades to "nothing hidden" rather than
+// erroring the whole list, matching loadTurnEndedByThread's degrade
+// posture.
+func loadHiddenByThread(statePath string) map[string]bool {
+	st, err := agentstate.Load(statePath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "codex-agents: load state (degrading to no hidden threads):", err)
+		return map[string]bool{}
+	}
+	hidden := make(map[string]bool, len(st.Threads))
+	for id, entry := range st.Threads {
+		hidden[id] = entry.Hidden
+	}
+	return hidden
 }
 
 // loadTurnEndedByThread reads agentstate's state.json and reports, per
@@ -226,6 +266,102 @@ func quickReplyAction(launcher *codexlaunch.Launcher) func(threadID, text string
 			return ui.QuickReplySentMsg{ThreadID: threadID}
 		}
 	}
+}
+
+// interruptAction adapts a tmux interrupt (send-keys C-c) into a
+// ui.Actions.Interrupt hook (PRD #1's List behavior -> Interrupt row): it
+// stops the selected thread's current turn without killing its session,
+// then records the turn as ended in agentstate itself — using the exact
+// same "<kind>@<RFC3339>" format issue #4's notify-hook wrapper writes
+// (notifyhook.LastTurnEventValue) — so tmuxstatus.StatusFor reads the
+// thread back as StatusWaiting immediately, rather than depending on
+// whether an interrupted codex process reliably invokes its own notify
+// hook (unverifiable in this sandbox, and not documented upstream).
+func interruptAction(tmux tmuxstatus.Runner, statePath string) func(row ui.Row) tea.Cmd {
+	return func(row ui.Row) tea.Cmd {
+		return func() tea.Msg {
+			if row.Status == tmuxstatus.StatusClosed {
+				return ui.ThreadLaunchErrorMsg{Err: fmt.Errorf("cannot interrupt %q: no live session", row.Thread.Title)}
+			}
+
+			session := tmuxstatus.SessionName(row.Thread.ID)
+			if err := tmux.Run(tmuxstatus.InterruptArgs(session)); err != nil {
+				return ui.ThreadLaunchErrorMsg{Err: fmt.Errorf("interrupt %s: %w", row.Thread.Title, err)}
+			}
+
+			event := notifyhook.LastTurnEventValue(notifyhook.Event{Kind: notifyhook.KindTurnEnded, At: time.Now().UTC()})
+			if err := agentstate.UpdateLastTurnEvent(statePath, row.Thread.ID, event); err != nil {
+				return ui.ThreadLaunchErrorMsg{Err: fmt.Errorf("interrupt %s: stopped turn but failed to update state: %w", row.Thread.Title, err)}
+			}
+			return ui.InterruptDoneMsg{ThreadID: row.Thread.ID}
+		}
+	}
+}
+
+// archiveAction adapts kill-session + agentstate hiding + worktree cleanup
+// into a ui.Actions.Archive hook (PRD #1's List behavior -> Archive row):
+// kill the tmux session if alive, mark the thread hidden in the cockpit's
+// own state (codexstate has no codex-sanctioned archive write path — see
+// agentstate.Entry.Hidden), then offer worktree removal via
+// archiveWorktree. Archiving never touches codex's own sqlite/jsonl
+// records, preserving the read-only guarantee.
+func archiveAction(launcher *codexlaunch.Launcher, statePath string) func(row ui.Row) tea.Cmd {
+	return func(row ui.Row) tea.Cmd {
+		return func() tea.Msg {
+			if row.Status != tmuxstatus.StatusClosed {
+				session := tmuxstatus.SessionName(row.Thread.ID)
+				if err := launcher.Tmux.Run(tmuxstatus.KillSessionArgs(session)); err != nil {
+					return ui.ThreadLaunchErrorMsg{Err: fmt.Errorf("archive %s: kill session: %w", row.Thread.Title, err)}
+				}
+			}
+
+			if err := agentstate.MarkHidden(statePath, row.Thread.ID); err != nil {
+				return ui.ThreadLaunchErrorMsg{Err: fmt.Errorf("archive %s: %w", row.Thread.Title, err)}
+			}
+
+			note := fmt.Sprintf("archived %s", row.Thread.Title)
+			if wtNote := archiveWorktree(launcher, statePath, row.Thread.ID); wtNote != "" {
+				note += "; " + wtNote
+			}
+			return ui.ArchiveDoneMsg{ThreadID: row.Thread.ID, Note: note}
+		}
+	}
+}
+
+// archiveWorktree looks up threadID's recorded worktree path (agentstate's
+// bookkeeping from Launch, if any) and, when worktreesafety.Check reports
+// it safe, removes it. It refuses — returning a human-readable reason
+// instead — when there's uncommitted or unpushed/unmerged work, per PRD
+// #1's Archive row ("refuses if uncommitted/unpushed work"). Returns "" for
+// a thread with no recorded worktree (e.g. resumed from a plain-terminal
+// session, or launched in-place in a non-git start dir), since there is
+// nothing to offer removal of.
+func archiveWorktree(launcher *codexlaunch.Launcher, statePath, threadID string) string {
+	st, err := agentstate.Load(statePath)
+	if err != nil {
+		return fmt.Sprintf("worktree check skipped: %v", err)
+	}
+	entry, ok := st.Threads[threadID]
+	if !ok || entry.WorktreePath == "" {
+		return ""
+	}
+
+	result, err := worktreesafety.Check(launcher.Git, entry.WorktreePath, defaultBaseBranch)
+	if err != nil {
+		return fmt.Sprintf("worktree check failed: %v", err)
+	}
+	if !result.Safe {
+		return fmt.Sprintf("worktree kept (%s)", result.Reason)
+	}
+
+	repoRoot, ok := codexlaunch.RepoRoot(launcher.Git, entry.WorktreePath)
+	if !ok {
+		return "worktree kept (could not resolve repo root)"
+	}
+	if err := worktreesafety.RemoveWorktree(launcher.Git, repoRoot, entry.WorktreePath); err != nil {
+		return fmt.Sprintf("worktree removal failed: %v", err)
+	}
+	return "worktree removed"
 }
 
 // refreshAction reloads the thread list, used after tmux detach returns

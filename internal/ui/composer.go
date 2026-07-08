@@ -38,6 +38,17 @@ type Actions struct {
 	// same generic error message Attach/Launch failures already surface as
 	// a transient status line.
 	QuickReply func(threadID, text string) tea.Cmd
+
+	// Interrupt stops row's current turn (PRD #1's List behavior ->
+	// Interrupt row: thread -> waiting, redirectable; no hard-kill).
+	// Returns a Cmd that yields InterruptDoneMsg or ThreadLaunchErrorMsg.
+	Interrupt func(row Row) tea.Cmd
+
+	// Archive kills row's tmux session if alive, archives the codex
+	// thread (or hides it in the cockpit's own state), and offers
+	// worktree removal per PRD #1's List behavior -> Archive row. Returns
+	// a Cmd that yields ArchiveDoneMsg or ThreadLaunchErrorMsg.
+	Archive func(row Row) tea.Cmd
 }
 
 // ThreadLaunchedMsg reports a successful composer launch. Row is inserted
@@ -61,6 +72,19 @@ type RowsRefreshedMsg struct{ Rows []Row }
 // completed (fire-and-forget per the PRD's cheap-path mandate — this is not
 // a delivery confirmation, just "the tmux commands didn't error").
 type QuickReplySentMsg struct{ ThreadID string }
+
+// InterruptDoneMsg reports that the Interrupt (`x`) action successfully
+// stopped ThreadID's current turn.
+type InterruptDoneMsg struct{ ThreadID string }
+
+// ArchiveDoneMsg reports that the Archive (`a`) action finished: ThreadID's
+// row is removed from the list (archived rows disappear, per PRD #1's List
+// behavior -> Archive row), and Note is a status-line summary — e.g.
+// whether the worktree was removed or kept because it wasn't safe to.
+type ArchiveDoneMsg struct {
+	ThreadID string
+	Note     string
+}
 
 // composerProfiles is the fixed profile cycle offered by the composer's
 // `@` key, per PRD #1's Launch semantics table (each corresponds to

@@ -150,7 +150,7 @@ func renderDetail(r Row) string {
 }
 
 func (m Model) footerLine() string {
-	return "↑/k ↓/j navigate    enter attach    i compose    r reply    / filter    ? help    q quit"
+	return "↑/k ↓/j navigate    enter attach    i compose    r reply    x interrupt    a archive    / filter    ? help    q quit"
 }
 
 func (m Model) helpView() string {
@@ -159,6 +159,8 @@ func (m Model) helpView() string {
 		{"enter", "attach alive thread / resume closed thread"},
 		{"i", "focus composer (@ swap profile, enter launch, esc cancel)"},
 		{"r", "quick-reply to the selected alive thread (enter send, esc cancel)"},
+		{"x", "interrupt the current turn (thread -> waiting)"},
+		{"a", "archive: kill session, hide thread, offer worktree removal"},
 		{"/", "filter by title, repo, branch"},
 		{"?", "toggle this help"},
 		{"q / ctrl+c", "quit"},

@@ -5,4 +5,4 @@
     model: gpt-5-codex  profile: -  tokens: -  cwd: /Users/tony/infra-drainer
   ○ Fix auth hook                              web-app · fix-auth-hook         1d
 
-↑/k ↓/j navigate    enter attach    i compose    r reply    / filter    ? help    q quit
+↑/k ↓/j navigate    enter attach    i compose    r reply    x interrupt    a archive    / filter    ? help    q quit

@@ -180,8 +180,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		sortRows(m.rows)
 		m.applyFilter()
 		return m, nil
+	case InterruptDoneMsg:
+		// The underlying status transition (working -> waiting) is driven
+		// by whatever the Interrupt action recorded in agentstate; refresh
+		// picks that back up the same way AttachDoneMsg does after detach.
+		m.statusLine = "interrupted " + m.titleFor(msg.ThreadID)
+		if m.actions.Refresh != nil {
+			return m, m.actions.Refresh()
+		}
+		return m, nil
+	case ArchiveDoneMsg:
+		m.rows = removeThread(m.rows, msg.ThreadID)
+		m.applyFilter()
+		m.statusLine = msg.Note
+		return m, nil
 	}
 	return m, nil
+}
+
+// titleFor looks up threadID's title among the model's current rows, for
+// status-line messages that need a human-readable name rather than a raw
+// ID. Returns threadID itself if the row is no longer present.
+func (m Model) titleFor(threadID string) string {
+	for _, r := range m.rows {
+		if r.Thread.ID == threadID {
+			return r.Thread.Title
+		}
+	}
+	return threadID
+}
+
+// removeThread returns rows with threadID's entry dropped, used by
+// ArchiveDoneMsg: an archived thread disappears from the list outright
+// (PRD #1's List behavior -> Archive row) rather than waiting for the next
+// Refresh.
+func removeThread(rows []Row, threadID string) []Row {
+	out := make([]Row, 0, len(rows))
+	for _, r := range rows {
+		if r.Thread.ID == threadID {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -258,6 +299,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.visible) > 0 && m.actions.Attach != nil {
 			row := m.rows[m.visible[m.cursor]]
 			return m, m.actions.Attach(row)
+		}
+	case "x":
+		if len(m.visible) > 0 && m.actions.Interrupt != nil {
+			row := m.rows[m.visible[m.cursor]]
+			return m, m.actions.Interrupt(row)
+		}
+	case "a":
+		if len(m.visible) > 0 && m.actions.Archive != nil {
+			row := m.rows[m.visible[m.cursor]]
+			return m, m.actions.Archive(row)
 		}
 	}
 	return m, nil
