@@ -139,6 +139,32 @@ func TestLoadThreads_EnrichesFromRolloutFile(t *testing.T) {
 	}
 }
 
+func TestLoadThreads_EnrichesFirstMessageFromRolloutFile(t *testing.T) {
+	dir := t.TempDir()
+	rolloutPath := filepath.Join(dir, "sessions", "2026", "07", "08", "rollout-enrich.jsonl")
+	writeRolloutFile(t, rolloutPath, sessionMetaPayload{
+		ID:      "t-enrich",
+		Profile: "general-agentic",
+	}, 4210, true)
+	appendLines(t, rolloutPath, userMessageLine(t, "first user message"))
+
+	buildFixtureDB(t, dir, "state_5.sqlite", []fixtureThread{
+		{ID: "t-enrich", Title: "Enrich me", CWD: "/repo/a", Model: "gpt-5-codex", GitBranch: "main", RecencyAgo: time.Minute, RolloutPath: rolloutPath},
+	})
+
+	result, err := LoadThreads(dir)
+	if err != nil {
+		t.Fatalf("LoadThreads: %v", err)
+	}
+	if len(result.Threads) != 1 {
+		t.Fatalf("expected 1 thread, got %d", len(result.Threads))
+	}
+	got := result.Threads[0]
+	if got.FirstMessage != "first user message" {
+		t.Errorf("FirstMessage = %q, want %q", got.FirstMessage, "first user message")
+	}
+}
+
 func TestLoadThreads_MissingRolloutFileLeavesEnrichmentUnknown(t *testing.T) {
 	dir := t.TempDir()
 	buildFixtureDB(t, dir, "state_5.sqlite", []fixtureThread{

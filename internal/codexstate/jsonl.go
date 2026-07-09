@@ -11,10 +11,11 @@ import (
 )
 
 // Rollout jsonl files are a stream of newline-delimited JSON records. This
-// package only understands two record shapes, both best-effort:
+// package only understands three record shapes, all best-effort:
 //
 //	{"type":"session_meta","payload":{"id":...,"title":...,"cwd":...,"model":...,"git_branch":...,"profile":...}}
 //	{"type":"token_count","payload":{"total_tokens":...}}
+//	{"type":"event_msg","payload":{"type":"user_message","message":...}}
 //
 // Any line that isn't valid JSON, or doesn't match one of these shapes, is
 // skipped rather than treated as fatal — this is the "best-effort" jsonl
@@ -35,6 +36,34 @@ type sessionMetaPayload struct {
 
 type tokenCountPayload struct {
 	TotalTokens int `json:"total_tokens"`
+}
+
+// eventMsgPayload is the payload shape of an event_msg record whose
+// Type == "user_message". Other event_msg subtypes, and other fields on
+// this subtype (images, local_images, text_elements), are ignored.
+type eventMsgPayload struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// firstMessageMaxRunes caps how much of a thread's first user message is
+// retained on Thread.FirstMessage. The field exists to give threads a
+// one-line fallback identity, and this parsing runs for every thread on
+// every load, so the cap keeps memory use bounded regardless of how long a
+// real user message is. Truncation is rune-safe and adds no ellipsis;
+// display concerns (e.g. further truncation for a list row) belong to the
+// UI layer.
+const firstMessageMaxRunes = 500
+
+// truncateRunes returns s truncated to at most max runes. It never splits a
+// multi-byte rune. If s already has max runes or fewer, it is returned
+// unchanged.
+func truncateRunes(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max])
 }
 
 // scanSessionsJSONL walks sessionsDir for *.jsonl rollout files and builds a
@@ -83,9 +112,10 @@ func threadFromRolloutFile(path string) (Thread, bool) {
 	defer f.Close()
 
 	var (
-		meta       sessionMetaPayload
-		haveMeta   bool
-		tokenCount = -1
+		meta         sessionMetaPayload
+		haveMeta     bool
+		tokenCount   = -1
+		firstMessage string
 	)
 
 	scanner := bufio.NewScanner(f)
@@ -113,6 +143,15 @@ func threadFromRolloutFile(path string) (Thread, bool) {
 			if err := json.Unmarshal(rec.Payload, &tc); err == nil {
 				tokenCount = tc.TotalTokens
 			}
+		case "event_msg":
+			if firstMessage == "" {
+				var p eventMsgPayload
+				if err := json.Unmarshal(rec.Payload, &p); err == nil && p.Type == "user_message" {
+					if trimmed := strings.TrimSpace(p.Message); trimmed != "" {
+						firstMessage = truncateRunes(trimmed, firstMessageMaxRunes)
+					}
+				}
+			}
 		}
 	}
 	if !haveMeta {
@@ -125,16 +164,17 @@ func threadFromRolloutFile(path string) (Thread, bool) {
 	}
 
 	return Thread{
-		ID:          meta.ID,
-		Title:       meta.Title,
-		CWD:         meta.CWD,
-		Model:       meta.Model,
-		GitBranch:   meta.GitBranch,
-		Archived:    false,
-		Recency:     recency,
-		RolloutPath: path,
-		Profile:     meta.Profile,
-		TokenCount:  tokenCount,
+		ID:           meta.ID,
+		Title:        meta.Title,
+		CWD:          meta.CWD,
+		Model:        meta.Model,
+		GitBranch:    meta.GitBranch,
+		Archived:     false,
+		Recency:      recency,
+		RolloutPath:  path,
+		Profile:      meta.Profile,
+		FirstMessage: firstMessage,
+		TokenCount:   tokenCount,
 	}, true
 }
 
@@ -154,5 +194,6 @@ func enrichFromSessionFiles(threads []Thread, sessionsDir string) {
 		}
 		threads[i].Profile = t.Profile
 		threads[i].TokenCount = t.TokenCount
+		threads[i].FirstMessage = t.FirstMessage
 	}
 }

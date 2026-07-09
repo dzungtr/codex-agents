@@ -128,3 +128,29 @@ func mustMarshal(t *testing.T, v any) []byte {
 	}
 	return b
 }
+
+// userMessageLine returns a single jsonl line for an event_msg/user_message
+// record carrying message, for tests that need first-user-message records
+// beyond what writeRolloutFile covers.
+func userMessageLine(t *testing.T, message string) string {
+	t.Helper()
+	payload := mustMarshal(t, eventMsgPayload{Type: "user_message", Message: message})
+	return `{"type":"event_msg","payload":` + string(payload) + `}`
+}
+
+// appendLines appends raw jsonl lines (each already a complete JSON object,
+// no trailing newline) to the file at path, which must already exist (e.g.
+// created by writeRolloutFile).
+func appendLines(t *testing.T, path string, lines ...string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open %s for append: %v", path, err)
+	}
+	defer f.Close()
+	for _, line := range lines {
+		if _, err := f.WriteString(line + "\n"); err != nil {
+			t.Fatalf("append line to %s: %v", path, err)
+		}
+	}
+}
