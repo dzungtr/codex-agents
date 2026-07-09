@@ -18,23 +18,44 @@ func send(m Model, msg tea.Msg) Model {
 	return updated.(Model)
 }
 
+// TestGolden_InitialView, TestGolden_CursorMovedToSecondRow and
+// TestGolden_FilterNarrowsToAuth each send an explicit
+// tea.WindowSizeMsg{Width: 80, Height: 24} first (issue #20 Testing
+// Decisions item 1) instead of relying on listWidth's 80 fallback, so the
+// golden fixture pins a width deliberately rather than by omission. Their
+// goldens are regenerated for the new two-line layout — every row's shape
+// changes, so this churn is the point of the slice, not a regression.
 func TestGolden_InitialView(t *testing.T) {
 	m := newFixtureModel()
+	m = send(m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	teatest.RequireEqualOutput(t, []byte(m.View()))
 }
 
 func TestGolden_CursorMovedToSecondRow(t *testing.T) {
 	m := newFixtureModel()
+	m = send(m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = send(m, tea.KeyMsg{Type: tea.KeyDown})
 	teatest.RequireEqualOutput(t, []byte(m.View()))
 }
 
 func TestGolden_FilterNarrowsToAuth(t *testing.T) {
 	m := newFixtureModel()
+	m = send(m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 	for _, r := range "auth" {
 		m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
+	teatest.RequireEqualOutput(t, []byte(m.View()))
+}
+
+// TestGolden_TwoLineNarrowWidth (issue #20 Testing Decisions item 3) pins a
+// narrow-terminal fixture at Width: 60: it proves age right-aligns to
+// m.width (not a fixed fallback) and that an overlong line 2 (the selected
+// row's meta+detail) truncates deterministically instead of wrapping into
+// a third terminal row.
+func TestGolden_TwoLineNarrowWidth(t *testing.T) {
+	m := newFixtureModel()
+	m = send(m, tea.WindowSizeMsg{Width: 60, Height: 24})
 	teatest.RequireEqualOutput(t, []byte(m.View()))
 }
 

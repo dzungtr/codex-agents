@@ -100,8 +100,18 @@ func TestNew_OrdersByStatusGroupThenRecency(t *testing.T) {
 	}
 }
 
+// TestModel_DetailLine_ShownOnlyForSelectedRow sends a wide WindowSizeMsg
+// first: issue #20 folds detail parts onto line 2 alongside metaColumn and
+// truncates that line to the terminal width (decision 8), and the fixture
+// row's full meta+detail text is ~109 runes — wider than the 80-fallback
+// budget (76) would allow without cutting off "tokens:"/"cwd:". A width
+// wide enough to hold it all keeps this test about "is the detail line
+// shown for the selected row", not about truncation, which has its own
+// coverage in view_test.go's TestRenderMetaLine_OverlongTruncatesNeverWraps.
 func TestModel_DetailLine_ShownOnlyForSelectedRow(t *testing.T) {
 	m := newFixtureModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = updated.(Model)
 	view := m.View()
 
 	if !strings.Contains(view, "model: gpt-5-codex") || !strings.Contains(view, "profile: general-agentic") || !strings.Contains(view, "tokens: 8200") || !strings.Contains(view, "cwd: /Users/tony/web-app") {
@@ -112,9 +122,13 @@ func TestModel_DetailLine_ShownOnlyForSelectedRow(t *testing.T) {
 	}
 }
 
+// TestModel_DetailLine_UnknownFieldsOmitted: see the width note on
+// TestModel_DetailLine_ShownOnlyForSelectedRow above — same reasoning.
 func TestModel_DetailLine_UnknownFieldsOmitted(t *testing.T) {
 	m := newFixtureModel()
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(Model)
 	view := m.View()
 

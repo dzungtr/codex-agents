@@ -1,8 +1,10 @@
 3 threads · 1 waiting · 1 working
 
-› ● Add dark mode                              web-app · add-dark-mode         3m
-    model: gpt-5-codex  cwd: /Users/tony/web-app
-  ◐ please refactor the drainer so it retries… infra-drainer · refactor-dr…   45m
-  ○                                            web-app · fix-auth-hook         1d
+› ● Add dark mode                                                             3m
+    web-app · add-dark-mode  model: gpt-5-codex  cwd: /Users/tony/web-app
+  ◐ please refactor the drainer so it retries network calls with backoff a…  45m
+    infra-drainer · refactor-drainer
+  ○                                                                           1d
+    web-app · fix-auth-hook
 
 ↑/k ↓/j navigate    enter attach    i compose    r reply    x interrupt    a archive    / filter    ? help    q quit

@@ -2,11 +2,13 @@
 // bubbletea model over rows produced by internal/codexstate (thread data)
 // and internal/tmuxstatus (working/waiting/closed status). It renders per
 // the style contract in Codex-Orchestrator-TUI/index.html, adapted to a
-// terminal list: status dot, title, repo·branch, age, a detail line on the
-// selected row, a `/` filter, and a `?` help overlay. It also owns the list
-// ordering rule (PRD #1's List behavior -> Ordering row): status groups
-// waiting -> working -> closed, most-recent first within each — see New
-// and sortRows.
+// terminal list: every thread renders as exactly two terminal rows — an
+// identity line (status dot, title, age right-aligned to the terminal
+// width) and a faint metadata line (repo·branch, plus model/profile/tokens/
+// cwd detail folded in when the row is selected) — a `/` filter, and a `?`
+// help overlay (issue #20). It also owns the list ordering rule (PRD #1's
+// List behavior -> Ordering row): status groups waiting -> working ->
+// closed, most-recent first within each — see New and sortRows.
 package ui
 
 import (
