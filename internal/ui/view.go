@@ -154,17 +154,27 @@ func metaColumn(t codexstate.Thread) string {
 	return strings.Join(parts, " · ")
 }
 
+// renderDetail builds the selected row's detail line from only the known
+// fields (model, profile, tokens, cwd, in that fixed order), omitting
+// unknown ones rather than substituting a "-" placeholder — see PRD #19.
+// "Unknown" means an empty string for Model/Profile/CWD, or a negative
+// TokenCount (the data layer's explicit -1 sentinel; TokenCount == 0 is a
+// known zero and still renders).
 func renderDetail(r Row) string {
-	profile := r.Thread.Profile
-	if profile == "" {
-		profile = "-"
+	var parts []string
+	if r.Thread.Model != "" {
+		parts = append(parts, "model: "+r.Thread.Model)
 	}
-	tokens := "-"
+	if r.Thread.Profile != "" {
+		parts = append(parts, "profile: "+r.Thread.Profile)
+	}
 	if r.Thread.TokenCount >= 0 {
-		tokens = fmt.Sprintf("%d", r.Thread.TokenCount)
+		parts = append(parts, fmt.Sprintf("tokens: %d", r.Thread.TokenCount))
 	}
-	line := fmt.Sprintf("    model: %s  profile: %s  tokens: %s  cwd: %s", r.Thread.Model, profile, tokens, r.Thread.CWD)
-	return detailStyle.Render(line)
+	if r.Thread.CWD != "" {
+		parts = append(parts, "cwd: "+r.Thread.CWD)
+	}
+	return detailStyle.Render("    " + strings.Join(parts, "  "))
 }
 
 func (m Model) footerLine() string {
