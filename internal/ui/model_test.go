@@ -112,14 +112,17 @@ func TestModel_DetailLine_ShownOnlyForSelectedRow(t *testing.T) {
 	}
 }
 
-func TestModel_DetailLine_UnknownFieldsRenderAsDash(t *testing.T) {
+func TestModel_DetailLine_UnknownFieldsOmitted(t *testing.T) {
 	m := newFixtureModel()
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(Model)
 	view := m.View()
 
-	if !strings.Contains(view, "profile: -") || !strings.Contains(view, "tokens: -") {
-		t.Fatalf("expected unknown profile/tokens to render as '-', got:\n%s", view)
+	if !strings.Contains(view, "model: gpt-5-codex") || !strings.Contains(view, "cwd: /Users/tony/infra-drainer") {
+		t.Fatalf("expected known model/cwd fields for the drainer row, got:\n%s", view)
+	}
+	if strings.Contains(view, "profile:") || strings.Contains(view, "tokens:") {
+		t.Fatalf("expected unknown profile/tokens to be omitted, got:\n%s", view)
 	}
 }
 
