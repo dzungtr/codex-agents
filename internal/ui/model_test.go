@@ -278,3 +278,25 @@ func TestModel_Quit_SetsQuittingAndReturnsQuitCmd(t *testing.T) {
 		t.Fatalf("expected a non-nil tea.Quit command")
 	}
 }
+
+// TestModel_Interrupt_UntitledRowUsesFirstMessageInStatusLine covers issue
+// #17's third user story: interrupting a thread codex never titled should
+// show "interrupted <first message>" rather than the degenerate
+// "interrupted " that r.Thread.Title alone would produce.
+func TestModel_Interrupt_UntitledRowUsesFirstMessageInStatusLine(t *testing.T) {
+	rows := []Row{
+		{
+			Thread: codexstate.Thread{
+				ID: "u1", Title: "", FirstMessage: "please add a dark mode toggle",
+				Recency: fixedNow(),
+			},
+			Status: tmuxstatus.StatusWorking,
+		},
+	}
+	m := New(rows).WithClock(fixedNow)
+	updated, _ := m.Update(InterruptDoneMsg{ThreadID: "u1"})
+	m = updated.(Model)
+	if !strings.Contains(m.View(), "interrupted please add a dark mode toggle") {
+		t.Fatalf("expected status line to use FirstMessage as fallback title, got:\n%s", m.View())
+	}
+}
