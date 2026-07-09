@@ -1,0 +1,8 @@
+3 threads · 1 waiting · 1 working
+
+› ● Both parts present                         web-app · add-dark-mode         3m
+    model: gpt-5-codex  profile: -  tokens: -  cwd: /Users/tony/web-app
+  ◐ Repo only                                  infra-drainer                  45m
+  ○ Neither part present                                                       1d
+
+↑/k ↓/j navigate    enter attach    i compose    r reply    x interrupt    a archive    / filter    ? help    q quit
