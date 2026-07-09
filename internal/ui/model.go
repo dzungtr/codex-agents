@@ -153,7 +153,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		sortRows(m.rows)
 		m.applyFilter()
 		m.selectThreadID(row.Thread.ID)
-		m.statusLine = "launched " + row.Thread.Title
+		m.statusLine = "launched " + displayTitle(row.Thread)
 		return m, nil
 	case ThreadLaunchErrorMsg:
 		m.statusLine = "error: " + msg.Err.Error()
@@ -204,7 +204,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) titleFor(threadID string) string {
 	for _, r := range m.rows {
 		if r.Thread.ID == threadID {
-			return r.Thread.Title
+			return displayTitle(r.Thread)
 		}
 	}
 	return threadID

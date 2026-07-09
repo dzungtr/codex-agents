@@ -2,7 +2,7 @@
 
 › ● Add dark mode                              web-app · add-dark-mode         3m
     model: gpt-5-codex  profile: general-agentic  tokens: 8200  cwd: /Users/tony/web-app
-  ◐ Refactor drainer                           infra-drainer · refactor-d…    45m
+  ◐ Refactor drainer                           infra-drainer · refactor-dr…   45m
   ○ Fix auth hook                              web-app · fix-auth-hook         1d
 
 ↑/k ↓/j navigate    enter attach    i compose    r reply    x interrupt    a archive    / filter    ? help    q quit

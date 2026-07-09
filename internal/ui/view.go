@@ -130,11 +130,25 @@ func renderRow(r Row, selected bool, now time.Time) string {
 		cursor = "› "
 	}
 	meta := metaColumn(r.Thread)
-	line := fmt.Sprintf("%s%s %-42s %-28s %5s", cursor, statusDot(r.Status), truncate(r.Thread.Title, 42), truncate(meta, 28), ageString(now, r.Thread.Recency))
+	line := fmt.Sprintf("%s%s %-42s %-28s %5s", cursor, statusDot(r.Status), truncate(displayTitle(r.Thread), 42), truncate(meta, 28), ageString(now, r.Thread.Recency))
 	if selected {
 		return selectedStyle.Render(line)
 	}
 	return line
+}
+
+// displayTitle returns the thread's codex Title, falling back to its first
+// user message (collapsed to one line) when codex never titled the thread.
+// Empty when both are absent. Every call site that displays a row's title —
+// renderRow's title column, and model.go's titleFor and the "launched "
+// status line — goes through this helper so the fallback behaves
+// identically everywhere (issue #17). matchesQuery (model.go) deliberately
+// does not: matching over fallback text would alter filter semantics.
+func displayTitle(t codexstate.Thread) string {
+	if strings.TrimSpace(t.Title) != "" {
+		return t.Title
+	}
+	return strings.Join(strings.Fields(t.FirstMessage), " ")
 }
 
 // metaColumn builds the repo · branch meta column from only the parts that
@@ -192,14 +206,20 @@ func (m Model) helpView() string {
 	return b.String()
 }
 
+// truncate shortens s to at most n runes, appending "…" when it cuts
+// content off. Rune-based (not byte-indexed) so a multibyte character is
+// never split in half — ASCII input (the only kind seen in today's goldens)
+// behaves byte-identically to a byte-indexed slice, so existing golden
+// files don't change (issue #17).
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
 	if n <= 1 {
-		return s[:n]
+		return string(r[:n])
 	}
-	return s[:n-1] + "…"
+	return string(r[:n-1]) + "…"
 }
 
 func ageString(now, t time.Time) string {

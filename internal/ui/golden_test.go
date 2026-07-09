@@ -83,3 +83,48 @@ func TestGolden_MetaOmitsMissingParts(t *testing.T) {
 	m := New(metaOmitsMissingPartsRows()).WithClock(fixedNow)
 	teatest.RequireEqualOutput(t, []byte(m.View()))
 }
+
+// titleFallsBackToFirstMessageRows is a dedicated fixture for
+// TestGolden_TitleFallsBackToFirstMessage, purpose-built so it doesn't
+// disturb fixtureRows (and therefore the existing golden files): one row
+// with a real codex Title (renders exactly as before), one untitled row
+// whose multiline FirstMessage collapses to one line and is long enough to
+// exercise renderRow's truncate(..., 42), and one untitled row with an
+// empty FirstMessage (both empty -> blank title cell, unchanged behavior).
+func titleFallsBackToFirstMessageRows() []Row {
+	base := fixedNow()
+	return []Row{
+		{
+			Thread: codexstate.Thread{
+				ID: "f1", Title: "Add dark mode", CWD: "/Users/tony/web-app",
+				Model: "gpt-5-codex", GitBranch: "add-dark-mode",
+				FirstMessage: "please add a dark mode toggle to the settings page",
+				Recency:      base.Add(-3 * time.Minute), TokenCount: -1,
+			},
+			Status: tmuxstatus.StatusWaiting,
+		},
+		{
+			Thread: codexstate.Thread{
+				ID: "f2", Title: "", CWD: "/Users/tony/infra-drainer",
+				Model: "gpt-5-codex", GitBranch: "refactor-drainer",
+				FirstMessage: "please refactor the\ndrainer so it retries\nnetwork calls with backoff and jitter",
+				Recency:      base.Add(-45 * time.Minute), TokenCount: -1,
+			},
+			Status: tmuxstatus.StatusWorking,
+		},
+		{
+			Thread: codexstate.Thread{
+				ID: "f3", Title: "", CWD: "/Users/tony/web-app",
+				Model: "gpt-5-codex", GitBranch: "fix-auth-hook",
+				FirstMessage: "",
+				Recency:      base.Add(-26 * time.Hour), TokenCount: -1,
+			},
+			Status: tmuxstatus.StatusClosed,
+		},
+	}
+}
+
+func TestGolden_TitleFallsBackToFirstMessage(t *testing.T) {
+	m := New(titleFallsBackToFirstMessageRows()).WithClock(fixedNow)
+	teatest.RequireEqualOutput(t, []byte(m.View()))
+}

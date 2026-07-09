@@ -2,6 +2,7 @@ package ui
 
 import (
 	"testing"
+	"unicode/utf8"
 
 	"github.com/dzungtr/codex-agents/internal/codexstate"
 )
@@ -38,5 +39,86 @@ func TestMetaColumn_Neither(t *testing.T) {
 	want := ""
 	if got := metaColumn(th); got != want {
 		t.Errorf("metaColumn(%+v) = %q, want %q", th, got, want)
+	}
+}
+
+// TestDisplayTitle covers issue #17's fallback order: Title (if non-blank
+// after TrimSpace) wins outright; otherwise FirstMessage collapsed to one
+// line via strings.Fields/Join; otherwise "".
+
+func TestDisplayTitle_TitleWins(t *testing.T) {
+	th := codexstate.Thread{Title: "Add dark mode", FirstMessage: "please add a dark mode toggle"}
+	want := "Add dark mode"
+	if got := displayTitle(th); got != want {
+		t.Errorf("displayTitle(%+v) = %q, want %q", th, got, want)
+	}
+}
+
+func TestDisplayTitle_EmptyTitleFallsBackToFirstMessage(t *testing.T) {
+	th := codexstate.Thread{Title: "", FirstMessage: "please add a dark mode toggle"}
+	want := "please add a dark mode toggle"
+	if got := displayTitle(th); got != want {
+		t.Errorf("displayTitle(%+v) = %q, want %q", th, got, want)
+	}
+}
+
+func TestDisplayTitle_WhitespaceOnlyTitleFallsBackToFirstMessage(t *testing.T) {
+	th := codexstate.Thread{Title: "   ", FirstMessage: "please add a dark mode toggle"}
+	want := "please add a dark mode toggle"
+	if got := displayTitle(th); got != want {
+		t.Errorf("displayTitle(%+v) = %q, want %q", th, got, want)
+	}
+}
+
+func TestDisplayTitle_FirstMessageWithNewlinesAndTabsCollapsesToOneLine(t *testing.T) {
+	th := codexstate.Thread{Title: "", FirstMessage: "please add\na dark\tmode  toggle"}
+	want := "please add a dark mode toggle"
+	if got := displayTitle(th); got != want {
+		t.Errorf("displayTitle(%+v) = %q, want %q", th, got, want)
+	}
+}
+
+func TestDisplayTitle_BothEmptyReturnsEmptyString(t *testing.T) {
+	th := codexstate.Thread{Title: "", FirstMessage: ""}
+	want := ""
+	if got := displayTitle(th); got != want {
+		t.Errorf("displayTitle(%+v) = %q, want %q", th, got, want)
+	}
+}
+
+// TestTruncate covers issue #17's rune-safety requirement: truncate must
+// operate on runes, not bytes, so a multibyte string is never cut
+// mid-character (which would produce invalid UTF-8), while ASCII behavior
+// (byte-identical to the previous implementation) and existing golden files
+// stay unchanged.
+
+func TestTruncate_ShortInputReturnedAsIs(t *testing.T) {
+	s := "short"
+	if got := truncate(s, 42); got != s {
+		t.Errorf("truncate(%q, 42) = %q, want %q (unchanged)", s, got, s)
+	}
+}
+
+func TestTruncate_ASCIIBehaviorUnchanged(t *testing.T) {
+	s := "this is a longer ascii string that needs truncating"
+	n := 38 // rune count, not byte count (the "…" suffix is 3 bytes but 1 rune)
+	want := "this is a longer ascii string that ne…"
+	got := truncate(s, n)
+	if got != want {
+		t.Errorf("truncate(%q, %d) = %q, want %q", s, n, got, want)
+	}
+}
+
+func TestTruncate_MultibyteInputCutRuneSafeWithEllipsis(t *testing.T) {
+	// Each "é" is a single rune but two bytes in UTF-8; a byte-indexed slice
+	// at an odd boundary would split one in half and produce invalid UTF-8.
+	s := "éééééééééé" // 10 runes, 20 bytes
+	got := truncate(s, 5)
+	if !utf8.ValidString(got) {
+		t.Errorf("truncate(%q, 5) = %q, not valid UTF-8", s, got)
+	}
+	want := "éééé…"
+	if got != want {
+		t.Errorf("truncate(%q, 5) = %q, want %q", s, got, want)
 	}
 }
