@@ -45,21 +45,23 @@ func (s Source) String() string {
 //
 // ID, Title, CWD, Model, GitBranch, Archived and Recency come directly from
 // codex's own records (sqlite threads table, or best-effort jsonl scan).
-// Profile and TokenCount are best-effort enrichment parsed from the rollout
-// session file when available; an empty Profile or a negative TokenCount
-// means "unknown", not "empty"/"zero".
+// Profile, TokenCount and FirstMessage are best-effort enrichment parsed
+// from the rollout session file when available; an empty Profile, a
+// negative TokenCount, or an empty FirstMessage means "unknown", not
+// "empty"/"zero".
 type Thread struct {
-	ID          string
-	Title       string
-	CWD         string
-	Model       string
-	GitBranch   string
-	Archived    bool
-	Recency     time.Time
-	RolloutPath string
-	Profile     string
-	TokenCount  int
-	Source      Source
+	ID           string
+	Title        string
+	CWD          string
+	Model        string
+	GitBranch    string
+	Archived     bool
+	Recency      time.Time
+	RolloutPath  string
+	Profile      string
+	FirstMessage string
+	TokenCount   int
+	Source       Source
 }
 
 // Repo derives a short repo label from CWD (its last path component), since

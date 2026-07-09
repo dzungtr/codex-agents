@@ -3,6 +3,7 @@ package codexstate
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -85,5 +86,113 @@ func TestScanSessionsJSONL_MissingDirReturnsEmptyNotError(t *testing.T) {
 	}
 	if len(threads) != 0 {
 		t.Fatalf("expected 0 threads, got %+v", threads)
+	}
+}
+
+func TestThreadFromRolloutFile_CapturesFirstUserMessage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	writeRolloutFile(t, path, sessionMetaPayload{ID: "t1", Title: "T1", CWD: "/repo"}, 0, false)
+	appendLines(t, path, userMessageLine(t, "create new agent"))
+
+	th, ok := threadFromRolloutFile(path)
+	if !ok {
+		t.Fatalf("threadFromRolloutFile: expected ok, got false")
+	}
+	if th.FirstMessage != "create new agent" {
+		t.Errorf("FirstMessage = %q, want %q", th.FirstMessage, "create new agent")
+	}
+}
+
+func TestThreadFromRolloutFile_NoUserMessageLeavesFirstMessageEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	writeRolloutFile(t, path, sessionMetaPayload{ID: "t1", Title: "T1", CWD: "/repo"}, 0, false)
+
+	th, ok := threadFromRolloutFile(path)
+	if !ok {
+		t.Fatalf("threadFromRolloutFile: expected ok, got false")
+	}
+	if th.FirstMessage != "" {
+		t.Errorf("FirstMessage = %q, want empty", th.FirstMessage)
+	}
+}
+
+func TestThreadFromRolloutFile_MultipleUserMessagesFirstNonEmptyWins(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	writeRolloutFile(t, path, sessionMetaPayload{ID: "t1", Title: "T1", CWD: "/repo"}, 0, false)
+	appendLines(t, path,
+		userMessageLine(t, "first message"),
+		userMessageLine(t, "second message"),
+	)
+
+	th, ok := threadFromRolloutFile(path)
+	if !ok {
+		t.Fatalf("threadFromRolloutFile: expected ok, got false")
+	}
+	if th.FirstMessage != "first message" {
+		t.Errorf("FirstMessage = %q, want %q", th.FirstMessage, "first message")
+	}
+}
+
+func TestThreadFromRolloutFile_WhitespaceOnlyFirstMessageSkipped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	writeRolloutFile(t, path, sessionMetaPayload{ID: "t1", Title: "T1", CWD: "/repo"}, 0, false)
+	appendLines(t, path,
+		userMessageLine(t, "   \n\t  "),
+		userMessageLine(t, "real message"),
+	)
+
+	th, ok := threadFromRolloutFile(path)
+	if !ok {
+		t.Fatalf("threadFromRolloutFile: expected ok, got false")
+	}
+	if th.FirstMessage != "real message" {
+		t.Errorf("FirstMessage = %q, want %q", th.FirstMessage, "real message")
+	}
+}
+
+func TestThreadFromRolloutFile_TruncatesLongMessageRuneSafe(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	writeRolloutFile(t, path, sessionMetaPayload{ID: "t1", Title: "T1", CWD: "/repo"}, 0, false)
+
+	// Use a multibyte rune (3-byte "€") repeated well past the cap, so a
+	// byte-slice truncation would split a rune and produce invalid UTF-8 or
+	// a different rune count.
+	long := strings.Repeat("€", firstMessageMaxRunes+50)
+	appendLines(t, path, userMessageLine(t, long))
+
+	th, ok := threadFromRolloutFile(path)
+	if !ok {
+		t.Fatalf("threadFromRolloutFile: expected ok, got false")
+	}
+	gotRunes := []rune(th.FirstMessage)
+	if len(gotRunes) != firstMessageMaxRunes {
+		t.Fatalf("FirstMessage rune count = %d, want %d", len(gotRunes), firstMessageMaxRunes)
+	}
+	want := strings.Repeat("€", firstMessageMaxRunes)
+	if th.FirstMessage != want {
+		t.Errorf("FirstMessage = %q, want %d copies of €", th.FirstMessage, firstMessageMaxRunes)
+	}
+}
+
+func TestThreadFromRolloutFile_MalformedEventMsgPayloadSkipped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	writeRolloutFile(t, path, sessionMetaPayload{ID: "t1", Title: "T1", CWD: "/repo"}, 0, false)
+	appendLines(t, path,
+		`{"type":"event_msg","payload":42}`,
+		userMessageLine(t, "recovered message"),
+	)
+
+	th, ok := threadFromRolloutFile(path)
+	if !ok {
+		t.Fatalf("threadFromRolloutFile: expected ok, got false")
+	}
+	if th.FirstMessage != "recovered message" {
+		t.Errorf("FirstMessage = %q, want %q", th.FirstMessage, "recovered message")
 	}
 }
