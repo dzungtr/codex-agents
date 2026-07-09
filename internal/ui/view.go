@@ -94,20 +94,34 @@ func (m Model) listView() string {
 	}
 
 	now := m.now()
+	width := m.listWidth()
 	var b strings.Builder
 	for vi, idx := range m.visible {
 		row := m.rows[idx]
 		selected := vi == m.cursor
-		b.WriteString(renderRow(row, selected, now))
-		if selected {
-			b.WriteString("\n")
-			b.WriteString(renderDetail(row))
-		}
+		b.WriteString(renderRow(row, selected, now, width))
 		if vi != len(m.visible)-1 {
 			b.WriteString("\n")
 		}
 	}
 	return b.String()
+}
+
+// listWidth is the terminal width renderRow lays its two lines out to: the
+// model's current m.width once a tea.WindowSizeMsg has arrived, or 80
+// before the first one (the initial frame, and every unit/model test that
+// never sends one). Floored at 20 so the title/line-2 truncation math in
+// renderRow/renderMetaLine never goes negative in a degenerate terminal
+// (issue #20 decision 2).
+func (m Model) listWidth() int {
+	w := m.width
+	if w <= 0 {
+		w = 80
+	}
+	if w < 20 {
+		w = 20
+	}
+	return w
 }
 
 // statusDot renders the status-dot glyph for r.Status, styled per the
@@ -124,17 +138,53 @@ func statusDot(s tmuxstatus.Status) string {
 	}
 }
 
-func renderRow(r Row, selected bool, now time.Time) string {
+// renderRow renders r as exactly two terminal rows (issue #20): line 1 is
+// the identity line — cursor, status dot, displayTitle (#17's fallback),
+// and age right-aligned to width; line 2 is renderMetaLine's faint
+// metadata line. width is the caller's listWidth(), never a raw m.width,
+// so the floor/fallback rule always applies.
+//
+// Line 1's budget math is rune-count based, not cell-width based, so a
+// wide-glyph (CJK) title can still throw the right edge off in a real
+// terminal — the same pre-existing quirk issue #17 declared out of scope
+// for truncate.
+func renderRow(r Row, selected bool, now time.Time, width int) string {
 	cursor := "  "
 	if selected {
 		cursor = "› "
 	}
-	meta := metaColumn(r.Thread)
-	line := fmt.Sprintf("%s%s %-42s %-28s %5s", cursor, statusDot(r.Status), truncate(displayTitle(r.Thread), 42), truncate(meta, 28), ageString(now, r.Thread.Recency))
-	if selected {
-		return selectedStyle.Render(line)
+	age := ageString(now, r.Thread.Recency)
+	// Budget: 4 fixed cells (cursor 2 + dot 1 + gap 1) + age + a minimum
+	// two-space gap between title and age, all subtracted from width.
+	title := truncate(displayTitle(r.Thread), width-4-len([]rune(age))-2)
+	pad := width - 4 - len([]rune(title)) - len([]rune(age))
+	if pad < 1 {
+		pad = 1
 	}
-	return line
+	line := cursor + statusDot(r.Status) + " " + title + strings.Repeat(" ", pad) + age
+	if selected {
+		// selectedStyle (Reverse) wraps line 1 only — line 2 stays faint in
+		// both states (issue #20 decision 6).
+		line = selectedStyle.Render(line)
+	}
+	return line + "\n" + renderMetaLine(r, selected, width)
+}
+
+// renderMetaLine builds line 2: metaColumn's repo·branch (#18) when
+// present, plus — only when the row is selected — detailParts' known-field
+// parts (#19's rules, extracted below). The whole line is truncated to
+// width-4 so an overlong selected row's tail never wraps into a third
+// terminal row (issue #20 decisions 4 and 8); selection never changes this
+// line's faint styling.
+func renderMetaLine(r Row, selected bool, width int) string {
+	var parts []string
+	if meta := metaColumn(r.Thread); meta != "" {
+		parts = append(parts, meta)
+	}
+	if selected {
+		parts = append(parts, detailParts(r.Thread)...)
+	}
+	return detailStyle.Render("    " + truncate(strings.Join(parts, "  "), width-4))
 }
 
 // displayTitle returns the thread's codex Title, falling back to its first
@@ -168,27 +218,29 @@ func metaColumn(t codexstate.Thread) string {
 	return strings.Join(parts, " · ")
 }
 
-// renderDetail builds the selected row's detail line from only the known
+// detailParts builds the selected row's detail parts from only the known
 // fields (model, profile, tokens, cwd, in that fixed order), omitting
 // unknown ones rather than substituting a "-" placeholder — see PRD #19.
 // "Unknown" means an empty string for Model/Profile/CWD, or a negative
 // TokenCount (the data layer's explicit -1 sentinel; TokenCount == 0 is a
-// known zero and still renders).
-func renderDetail(r Row) string {
+// known zero and still renders). Extracted from #19's renderDetail (which
+// rendered these parts as their own detail line) so issue #20's
+// renderMetaLine can fold them into the row's line 2 instead.
+func detailParts(t codexstate.Thread) []string {
 	var parts []string
-	if r.Thread.Model != "" {
-		parts = append(parts, "model: "+r.Thread.Model)
+	if t.Model != "" {
+		parts = append(parts, "model: "+t.Model)
 	}
-	if r.Thread.Profile != "" {
-		parts = append(parts, "profile: "+r.Thread.Profile)
+	if t.Profile != "" {
+		parts = append(parts, "profile: "+t.Profile)
 	}
-	if r.Thread.TokenCount >= 0 {
-		parts = append(parts, fmt.Sprintf("tokens: %d", r.Thread.TokenCount))
+	if t.TokenCount >= 0 {
+		parts = append(parts, fmt.Sprintf("tokens: %d", t.TokenCount))
 	}
-	if r.Thread.CWD != "" {
-		parts = append(parts, "cwd: "+r.Thread.CWD)
+	if t.CWD != "" {
+		parts = append(parts, "cwd: "+t.CWD)
 	}
-	return detailStyle.Render("    " + strings.Join(parts, "  "))
+	return parts
 }
 
 func (m Model) footerLine() string {
