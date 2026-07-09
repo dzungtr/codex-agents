@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/dzungtr/codex-agents/internal/codexstate"
 	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
 )
 
@@ -128,12 +129,29 @@ func renderRow(r Row, selected bool, now time.Time) string {
 	if selected {
 		cursor = "› "
 	}
-	meta := fmt.Sprintf("%s · %s", r.Thread.Repo(), r.Thread.GitBranch)
+	meta := metaColumn(r.Thread)
 	line := fmt.Sprintf("%s%s %-42s %-28s %5s", cursor, statusDot(r.Status), truncate(r.Thread.Title, 42), truncate(meta, 28), ageString(now, r.Thread.Recency))
 	if selected {
 		return selectedStyle.Render(line)
 	}
 	return line
+}
+
+// metaColumn builds the repo · branch meta column from only the parts that
+// are present, so a missing repo or branch never leaves a dangling " · "
+// separator (issue #18). "Present" means non-empty: t.Repo() is "" only
+// when CWD is unset, and GitBranch is "" when codex recorded no branch. No
+// trimming — codex-sourced values aren't whitespace-padded, and the filter
+// (rowMatches) matches against these same untrimmed values.
+func metaColumn(t codexstate.Thread) string {
+	var parts []string
+	if repo := t.Repo(); repo != "" {
+		parts = append(parts, repo)
+	}
+	if t.GitBranch != "" {
+		parts = append(parts, t.GitBranch)
+	}
+	return strings.Join(parts, " · ")
 }
 
 func renderDetail(r Row) string {
