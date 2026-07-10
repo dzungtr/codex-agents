@@ -109,7 +109,7 @@ func run() error {
 		Archive:    archiveAction(launcher, statePath),
 	}
 
-	_, err = tea.NewProgram(ui.New(rows).WithActions(actions), tea.WithAltScreen()).Run()
+	_, err = tea.NewProgram(ui.New(rows).WithActions(actions).WithLaunchDir(startDir), tea.WithAltScreen()).Run()
 	return err
 }
 

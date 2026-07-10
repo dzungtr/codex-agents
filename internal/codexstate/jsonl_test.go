@@ -179,6 +179,39 @@ func TestThreadFromRolloutFile_TruncatesLongMessageRuneSafe(t *testing.T) {
 	}
 }
 
+func TestThreadFromRolloutFile_MessageCountCountsEventMsgRecords(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	writeRolloutFile(t, path, sessionMetaPayload{ID: "t1", Title: "T1", CWD: "/repo"}, 0, false)
+	appendLines(t, path,
+		userMessageLine(t, "first message"),
+		userMessageLine(t, "second message"),
+		`{"type":"event_msg","payload":{"type":"agent_message","message":"a reply"}}`,
+	)
+
+	th, ok := threadFromRolloutFile(path)
+	if !ok {
+		t.Fatalf("threadFromRolloutFile: expected ok, got false")
+	}
+	if th.MessageCount != 3 {
+		t.Errorf("MessageCount = %d, want 3", th.MessageCount)
+	}
+}
+
+func TestThreadFromRolloutFile_MessageCountZeroWhenNoEventMsgRecords(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	writeRolloutFile(t, path, sessionMetaPayload{ID: "t1", Title: "T1", CWD: "/repo"}, 0, false)
+
+	th, ok := threadFromRolloutFile(path)
+	if !ok {
+		t.Fatalf("threadFromRolloutFile: expected ok, got false")
+	}
+	if th.MessageCount != 0 {
+		t.Errorf("MessageCount = %d, want 0 (known zero, not unknown)", th.MessageCount)
+	}
+}
+
 func TestThreadFromRolloutFile_MalformedEventMsgPayloadSkipped(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rollout.jsonl")

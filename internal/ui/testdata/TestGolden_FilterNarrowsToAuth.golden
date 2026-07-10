@@ -1,6 +1,10 @@
+                              codex — orchestrator                           [?]
+────────────────────────────────────────────────────────────────────────────────
 /auth
 
 › ○ Fix auth hook                                                             1d
-    web-app · fix-auth-hook  model: gpt-5-codex  cwd: /Users/tony/web-app
+    web-app · fix-auth-hook  cwd: /Users/tony/web-app              [gpt-5-codex]
 
+› Describe a task and press Enter to launch a thread…  [general-agentic]
+Launches detached — closing this window won't stop it.
 ↑/k ↓/j navigate    enter attach    i compose    r reply    x interrupt    a archive    / filter    ? help    q quit

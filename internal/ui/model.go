@@ -67,6 +67,12 @@ type Model struct {
 	// row-Enter wire up to; see Actions' doc comment.
 	actions Actions
 
+	// launchDir is shown in the composer bar's hint line ("Launches
+	// detached in <launchDir> ...", design drift gap 4) — the directory a
+	// composer-submitted Launch actually starts from. Set via
+	// WithLaunchDir; the zero value (unset) just omits that clause.
+	launchDir string
+
 	width, height int
 	quitting      bool
 
@@ -117,6 +123,14 @@ func sortRows(rows []Row) {
 // deterministic "age" output; production code leaves this as time.Now.
 func (m Model) WithClock(now func() time.Time) Model {
 	m.now = now
+	return m
+}
+
+// WithLaunchDir sets the directory shown in the composer bar's hint line
+// (design drift gap 4). Without it (the zero value), the hint omits the
+// "in <dir>" clause rather than showing a blank directory.
+func (m Model) WithLaunchDir(dir string) Model {
+	m.launchDir = dir
 	return m
 }
 

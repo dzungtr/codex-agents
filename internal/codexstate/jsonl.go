@@ -115,6 +115,7 @@ func threadFromRolloutFile(path string) (Thread, bool) {
 		meta         sessionMetaPayload
 		haveMeta     bool
 		tokenCount   = -1
+		messageCount = 0
 		firstMessage string
 	)
 
@@ -144,6 +145,11 @@ func threadFromRolloutFile(path string) (Thread, bool) {
 				tokenCount = tc.TotalTokens
 			}
 		case "event_msg":
+			// messageCount counts every event_msg record seen (not just
+			// user_message), as a best-effort proxy for "how many messages
+			// this conversation has" — the rollout format doesn't expose a
+			// narrower "conversation turn" concept than that.
+			messageCount++
 			if firstMessage == "" {
 				var p eventMsgPayload
 				if err := json.Unmarshal(rec.Payload, &p); err == nil && p.Type == "user_message" {
@@ -175,6 +181,7 @@ func threadFromRolloutFile(path string) (Thread, bool) {
 		Profile:      meta.Profile,
 		FirstMessage: firstMessage,
 		TokenCount:   tokenCount,
+		MessageCount: messageCount,
 	}, true
 }
 
@@ -194,6 +201,7 @@ func enrichFromSessionFiles(threads []Thread, sessionsDir string) {
 		}
 		threads[i].Profile = t.Profile
 		threads[i].TokenCount = t.TokenCount
+		threads[i].MessageCount = t.MessageCount
 		threads[i].FirstMessage = t.FirstMessage
 	}
 }

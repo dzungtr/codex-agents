@@ -1,10 +1,14 @@
+                              codex — orchestrator                           [?]
+────────────────────────────────────────────────────────────────────────────────
 3 threads · 1 waiting · 1 working
 
   ● Add dark mode                                                             3m
-    web-app · add-dark-mode
+    web-app · add-dark-mode               [gpt-5-codex] [general-agentic] 4 msgs
 › ◐ Refactor drainer                                                         45m
-    infra-drainer · refactor-drainer  model: gpt-5-codex  cwd: /Users/tony/infr…
+    infra-drainer · refactor-drainer  cwd: /Users/tony/infra-dra…  [gpt-5-codex]
   ○ Fix auth hook                                                             1d
-    web-app · fix-auth-hook
+    web-app · fix-auth-hook                                        [gpt-5-codex]
 
+› Describe a task and press Enter to launch a thread…  [general-agentic]
+Launches detached — closing this window won't stop it.
 ↑/k ↓/j navigate    enter attach    i compose    r reply    x interrupt    a archive    / filter    ? help    q quit
