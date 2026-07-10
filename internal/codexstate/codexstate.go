@@ -45,10 +45,10 @@ func (s Source) String() string {
 //
 // ID, Title, CWD, Model, GitBranch, Archived and Recency come directly from
 // codex's own records (sqlite threads table, or best-effort jsonl scan).
-// Profile, TokenCount and FirstMessage are best-effort enrichment parsed
-// from the rollout session file when available; an empty Profile, a
-// negative TokenCount, or an empty FirstMessage means "unknown", not
-// "empty"/"zero".
+// Profile, TokenCount, MessageCount and FirstMessage are best-effort
+// enrichment parsed from the rollout session file when available; an empty
+// Profile, a negative TokenCount/MessageCount, or an empty FirstMessage
+// means "unknown", not "empty"/"zero".
 type Thread struct {
 	ID           string
 	Title        string
@@ -61,6 +61,7 @@ type Thread struct {
 	Profile      string
 	FirstMessage string
 	TokenCount   int
+	MessageCount int
 	Source       Source
 }
 
@@ -215,6 +216,7 @@ func queryThreads(dbPath string) ([]Thread, error) {
 		t.Recency = time.Unix(recency, 0).UTC()
 		t.Source = SourceSQLite
 		t.TokenCount = -1
+		t.MessageCount = -1
 		threads = append(threads, t)
 	}
 	if err := rows.Err(); err != nil {

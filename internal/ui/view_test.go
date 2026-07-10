@@ -72,27 +72,70 @@ func TestMetaColumn_Neither(t *testing.T) {
 // TestDetailParts_AllFieldsKnown pins detailParts' output for a fully known
 // thread to today's format: same labels, same canonical order. Ported from
 // issue #19's TestRenderDetail_AllFieldsKnown now that the parts-building
-// logic lives in detailParts rather than renderDetail (issue #20).
+// logic lives in detailParts rather than renderDetail (issue #20). Model
+// and Profile are set on th to prove detailParts ignores them now that
+// design drift gap 3 moved those two into badgeClusterPlain instead.
 func TestDetailParts_AllFieldsKnown(t *testing.T) {
 	th := codexstate.Thread{Model: "m", Profile: "p", TokenCount: 8200, CWD: "/x"}
 	got := detailParts(th)
-	want := []string{"model: m", "profile: p", "tokens: 8200", "cwd: /x"}
+	want := []string{"tokens: 8200", "cwd: /x"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("detailParts(%+v) = %v, want %v", th, got, want)
 	}
 }
 
-// TestDetailParts_PartialFieldsOmitsUnknown covers a thread with only model
-// and cwd known (profile "" and tokens -1, the codexstate "unknown"
-// sentinels): the result should contain just those two parts, in canonical
-// order, with no "profile:"/"tokens:" labels and no "-" placeholder. Ported
-// from issue #19's TestRenderDetail_PartialFieldsOmitsUnknown.
+// TestDetailParts_PartialFieldsOmitsUnknown covers a thread with only cwd
+// known (tokens -1, the codexstate "unknown" sentinel): the result should
+// contain just that one part, with no "tokens:" label and no "-"
+// placeholder. Ported from issue #19's TestRenderDetail_PartialFieldsOmitsUnknown.
 func TestDetailParts_PartialFieldsOmitsUnknown(t *testing.T) {
 	th := codexstate.Thread{Model: "m", Profile: "", TokenCount: -1, CWD: "/x"}
 	got := detailParts(th)
-	want := []string{"model: m", "cwd: /x"}
+	want := []string{"cwd: /x"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("detailParts(%+v) = %v, want %v", th, got, want)
+	}
+}
+
+// TestBadgeClusterPlain_AllFieldsKnown pins badgeClusterPlain's output for
+// a fully known thread: model and profile bracketed, message count as a
+// bare "N msgs" suffix, in that order (design drift gap 3).
+func TestBadgeClusterPlain_AllFieldsKnown(t *testing.T) {
+	th := codexstate.Thread{Model: "m", Profile: "p", MessageCount: 4}
+	want := "[m] [p] 4 msgs"
+	if got := badgeClusterPlain(th); got != want {
+		t.Fatalf("badgeClusterPlain(%+v) = %q, want %q", th, got, want)
+	}
+}
+
+// TestBadgeClusterPlain_PartialFieldsOmitsUnknown covers a thread with only
+// Model known (Profile "" and MessageCount -1, both "unknown" sentinels):
+// only the model badge should render.
+func TestBadgeClusterPlain_PartialFieldsOmitsUnknown(t *testing.T) {
+	th := codexstate.Thread{Model: "m", Profile: "", MessageCount: -1}
+	want := "[m]"
+	if got := badgeClusterPlain(th); got != want {
+		t.Fatalf("badgeClusterPlain(%+v) = %q, want %q", th, got, want)
+	}
+}
+
+// TestBadgeClusterPlain_MessageCountZeroIsKnown asserts MessageCount == 0
+// produces a "0 msgs" part — it's a known zero, not the negative "unknown"
+// sentinel (mirrors TestDetailParts_TokenCountZeroIsKnown's reasoning).
+func TestBadgeClusterPlain_MessageCountZeroIsKnown(t *testing.T) {
+	th := codexstate.Thread{MessageCount: 0}
+	want := "0 msgs"
+	if got := badgeClusterPlain(th); got != want {
+		t.Fatalf("badgeClusterPlain(%+v) = %q, want %q", th, got, want)
+	}
+}
+
+// TestBadgeClusterPlain_AllFieldsUnknownReturnsEmpty covers the edge where
+// every field is unknown: badgeClusterPlain returns "", no labels.
+func TestBadgeClusterPlain_AllFieldsUnknownReturnsEmpty(t *testing.T) {
+	th := codexstate.Thread{MessageCount: -1}
+	if got := badgeClusterPlain(th); got != "" {
+		t.Fatalf("badgeClusterPlain(%+v) = %q, want empty", th, got)
 	}
 }
 
@@ -120,38 +163,56 @@ func TestDetailParts_AllFieldsUnknownReturnsEmpty(t *testing.T) {
 	}
 }
 
-// TestRenderMetaLine_NotSelected_MetaOnly covers issue #20 decision 4: a
-// non-selected row's line 2 is just the faint 4-space indent plus
-// metaColumn's output — detail parts never appear unless selected.
-func TestRenderMetaLine_NotSelected_MetaOnly(t *testing.T) {
+// TestRenderMetaLine_NotSelected_ShowsMetaAndBadgesNotDetail covers design
+// drift gap 3: a non-selected row's line 2 shows metaColumn's repo·branch
+// plus the badge cluster (model/profile — shown regardless of selection),
+// but never detailParts' tokens/cwd, which stay selected-only (issue #20
+// decision 4, still true for the fields that remain in detailParts).
+func TestRenderMetaLine_NotSelected_ShowsMetaAndBadgesNotDetail(t *testing.T) {
 	r := Row{Thread: codexstate.Thread{
 		CWD: "/Users/tony/web-app", GitBranch: "add-dark-mode",
-		Model: "m", Profile: "p", TokenCount: 1,
+		Model: "m", Profile: "p", TokenCount: 1, MessageCount: -1,
 	}}
-	got := renderMetaLine(r, false, 80)
-	want := detailStyle.Render("    web-app · add-dark-mode")
-	if got != want {
-		t.Fatalf("renderMetaLine(selected=false) = %q, want %q", got, want)
+	got := stripANSI(renderMetaLine(r, false, 80))
+	if !strings.Contains(got, "web-app · add-dark-mode") {
+		t.Fatalf("expected metaColumn in a non-selected row's line 2, got %q", got)
+	}
+	if !strings.Contains(got, "[m]") || !strings.Contains(got, "[p]") {
+		t.Fatalf("expected model/profile badges on a non-selected row, got %q", got)
+	}
+	if strings.Contains(got, "tokens:") {
+		t.Fatalf("expected tokens (detailParts) to stay selected-only, got %q", got)
 	}
 }
 
-// TestRenderMetaLine_Selected_AppendsDetailParts covers issue #20 decision
-// 4: a selected row's line 2 appends detailParts after metaColumn, joined
-// with the same two-space gap used between other parts.
-func TestRenderMetaLine_Selected_AppendsDetailParts(t *testing.T) {
-	r := Row{Thread: codexstate.Thread{CWD: "/x", Model: "m", Profile: "", TokenCount: -1}}
-	got := renderMetaLine(r, true, 80)
-	want := detailStyle.Render("    x  model: m  cwd: /x")
-	if got != want {
-		t.Fatalf("renderMetaLine(selected=true) = %q, want %q", got, want)
+// TestRenderMetaLine_Selected_AppendsDetailPartsAndBadges covers issue #20
+// decision 4 (detailParts appends after metaColumn when selected) plus
+// design drift gap 3 (the badge cluster also appears, and a selected row's
+// line 2 is padded to the full width for the background wash — see
+// renderRow's line 1 doing the same, and selectedStyle's doc comment).
+func TestRenderMetaLine_Selected_AppendsDetailPartsAndBadges(t *testing.T) {
+	r := Row{Thread: codexstate.Thread{CWD: "/x", Model: "m", Profile: "", TokenCount: -1, MessageCount: 2}}
+	got := stripANSI(renderMetaLine(r, true, 80))
+	if !strings.Contains(got, "cwd: /x") {
+		t.Fatalf("expected detailParts' cwd on the selected row, got %q", got)
+	}
+	if !strings.Contains(got, "[m]") {
+		t.Fatalf("expected model badge on the selected row, got %q", got)
+	}
+	if !strings.Contains(got, "2 msgs") {
+		t.Fatalf("expected message-count badge on the selected row, got %q", got)
+	}
+	if n := utf8.RuneCountInString(got); n != 80 {
+		t.Fatalf("expected a selected row's line 2 padded to the full width (background wash), got length %d: %q", n, got)
 	}
 }
 
 // TestRenderMetaLine_EmptyMeta_NotSelected_IndentOnly covers issue #20
-// decision 7: a non-selected row with no repo/branch still renders line 2
-// as the bare faint 4-space indent (constant block height).
+// decision 7: a non-selected row with no repo/branch and no known badge
+// fields still renders line 2 as the bare faint 4-space indent (constant
+// block height).
 func TestRenderMetaLine_EmptyMeta_NotSelected_IndentOnly(t *testing.T) {
-	r := Row{Thread: codexstate.Thread{}}
+	r := Row{Thread: codexstate.Thread{MessageCount: -1}}
 	got := renderMetaLine(r, false, 80)
 	want := detailStyle.Render("    ")
 	if got != want {
@@ -161,9 +222,11 @@ func TestRenderMetaLine_EmptyMeta_NotSelected_IndentOnly(t *testing.T) {
 
 // TestRenderMetaLine_OverlongTruncatesNeverWraps covers issue #20 decision
 // 8: line 2 content longer than the available width truncates with "…"
-// instead of wrapping into a third terminal row.
+// instead of wrapping into a third terminal row. MessageCount is pinned to
+// -1 (unknown) so the badge cluster stays empty and this test isolates the
+// left-side (meta) truncation math design drift gap 3 didn't change.
 func TestRenderMetaLine_OverlongTruncatesNeverWraps(t *testing.T) {
-	r := Row{Thread: codexstate.Thread{CWD: "/" + strings.Repeat("a", 100)}}
+	r := Row{Thread: codexstate.Thread{CWD: "/" + strings.Repeat("a", 100), MessageCount: -1}}
 	got := renderMetaLine(r, false, 30)
 	if strings.Contains(got, "\n") {
 		t.Fatalf("renderMetaLine() wrapped into multiple lines: %q", got)
@@ -228,7 +291,10 @@ func TestRenderRow_LongTitleTruncatesRuneSafe(t *testing.T) {
 }
 
 // TestListWidth covers issue #20 decision 2: m.width when positive, 80
-// before the first WindowSizeMsg, floored at 20 in degenerate terminals.
+// before the first WindowSizeMsg, floored at 20 in degenerate terminals,
+// and capped at maxContentWidth on a very wide one (design drift's
+// column-layout-looseness note: uncapped, a wide real terminal leaves a
+// huge incoherent gap between a row's meta text and its badge cluster).
 func TestListWidth(t *testing.T) {
 	cases := []struct {
 		width int
@@ -237,6 +303,7 @@ func TestListWidth(t *testing.T) {
 		{0, 80},
 		{10, 20},
 		{120, 120},
+		{300, maxContentWidth},
 	}
 	for _, c := range cases {
 		m := Model{width: c.width}

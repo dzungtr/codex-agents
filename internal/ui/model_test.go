@@ -28,7 +28,7 @@ func fixtureRows() []Row {
 			Thread: codexstate.Thread{
 				ID: "t2", Title: "Add dark mode", CWD: "/Users/tony/web-app",
 				Model: "gpt-5-codex", GitBranch: "add-dark-mode",
-				Recency: base.Add(-3 * time.Minute), Profile: "general-agentic", TokenCount: 8200,
+				Recency: base.Add(-3 * time.Minute), Profile: "general-agentic", TokenCount: 8200, MessageCount: 4,
 			},
 			Status: tmuxstatus.StatusWaiting,
 		},
@@ -36,7 +36,7 @@ func fixtureRows() []Row {
 			Thread: codexstate.Thread{
 				ID: "t3", Title: "Refactor drainer", CWD: "/Users/tony/infra-drainer",
 				Model: "gpt-5-codex", GitBranch: "refactor-drainer",
-				Recency: base.Add(-45 * time.Minute), TokenCount: -1,
+				Recency: base.Add(-45 * time.Minute), TokenCount: -1, MessageCount: -1,
 			},
 			Status: tmuxstatus.StatusWorking,
 		},
@@ -44,7 +44,7 @@ func fixtureRows() []Row {
 			Thread: codexstate.Thread{
 				ID: "t1", Title: "Fix auth hook", CWD: "/Users/tony/web-app",
 				Model: "gpt-5-codex", GitBranch: "fix-auth-hook",
-				Recency: base.Add(-26 * time.Hour), TokenCount: -1,
+				Recency: base.Add(-26 * time.Hour), TokenCount: -1, MessageCount: -1,
 			},
 			Status: tmuxstatus.StatusClosed,
 		},
@@ -108,22 +108,37 @@ func TestNew_OrdersByStatusGroupThenRecency(t *testing.T) {
 // wide enough to hold it all keeps this test about "is the detail line
 // shown for the selected row", not about truncation, which has its own
 // coverage in view_test.go's TestRenderMetaLine_OverlongTruncatesNeverWraps.
+//
+// Design drift gap 3 moved model/profile out of the selected-only detail
+// line into a badge cluster shown on every row, so this test now checks
+// tokens/cwd stay selected-only while the model badge appears on all three
+// rows and the profile badge appears (only the first/selected row has a
+// known Profile in fixtureRows).
 func TestModel_DetailLine_ShownOnlyForSelectedRow(t *testing.T) {
 	m := newFixtureModel()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
 	m = updated.(Model)
 	view := m.View()
 
-	if !strings.Contains(view, "model: gpt-5-codex") || !strings.Contains(view, "profile: general-agentic") || !strings.Contains(view, "tokens: 8200") || !strings.Contains(view, "cwd: /Users/tony/web-app") {
-		t.Fatalf("expected detail line for the selected (first) row, got:\n%s", view)
+	if !strings.Contains(view, "tokens: 8200") || !strings.Contains(view, "cwd: /Users/tony/web-app") {
+		t.Fatalf("expected tokens/cwd detail for the selected (first) row, got:\n%s", view)
 	}
-	if strings.Count(view, "model:") != 1 {
-		t.Fatalf("expected exactly one detail line (only for the selected row), got:\n%s", view)
+	if strings.Count(view, "tokens:") != 1 {
+		t.Fatalf("expected exactly one tokens: detail (only for the selected row), got:\n%s", view)
+	}
+	if strings.Count(view, "[gpt-5-codex]") != 3 {
+		t.Fatalf("expected the model badge on all three rows, got:\n%s", view)
+	}
+	if !strings.Contains(view, "[general-agentic]") {
+		t.Fatalf("expected the selected row's profile badge, got:\n%s", view)
 	}
 }
 
 // TestModel_DetailLine_UnknownFieldsOmitted: see the width note on
-// TestModel_DetailLine_ShownOnlyForSelectedRow above — same reasoning.
+// TestModel_DetailLine_ShownOnlyForSelectedRow above — same reasoning. The
+// drainer row (fixtureRows' t3) has a known Model but no Profile and a
+// negative MessageCount, so its badge cluster should show the model badge
+// alone; TokenCount is also unknown there, so tokens: stays omitted too.
 func TestModel_DetailLine_UnknownFieldsOmitted(t *testing.T) {
 	m := newFixtureModel()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
@@ -132,11 +147,26 @@ func TestModel_DetailLine_UnknownFieldsOmitted(t *testing.T) {
 	m = updated.(Model)
 	view := m.View()
 
-	if !strings.Contains(view, "model: gpt-5-codex") || !strings.Contains(view, "cwd: /Users/tony/infra-drainer") {
-		t.Fatalf("expected known model/cwd fields for the drainer row, got:\n%s", view)
+	if !strings.Contains(view, "cwd: /Users/tony/infra-drainer") {
+		t.Fatalf("expected known cwd field for the drainer row, got:\n%s", view)
 	}
-	if strings.Contains(view, "profile:") || strings.Contains(view, "tokens:") {
-		t.Fatalf("expected unknown profile/tokens to be omitted, got:\n%s", view)
+	if strings.Contains(view, "tokens:") {
+		t.Fatalf("expected unknown tokens to be omitted, got:\n%s", view)
+	}
+
+	idx := strings.Index(view, "Refactor drainer")
+	if idx == -1 {
+		t.Fatalf("expected drainer row in view, got:\n%s", view)
+	}
+	metaLine := strings.SplitN(view[idx:], "\n", 3)[1]
+	if !strings.Contains(metaLine, "[gpt-5-codex]") {
+		t.Fatalf("expected model badge on drainer row's meta line, got:\n%s", metaLine)
+	}
+	if strings.Contains(metaLine, "msgs") {
+		t.Fatalf("expected message count omitted (unknown) on drainer row, got:\n%s", metaLine)
+	}
+	if strings.Count(metaLine, "[") != 1 {
+		t.Fatalf("expected only the model badge (no profile badge) on drainer row, got:\n%s", metaLine)
 	}
 }
 
@@ -161,7 +191,7 @@ func TestModel_Navigation_JKAndArrowsMoveCursorAndClamp(t *testing.T) {
 	// Clamp at the bottom.
 	m = move(m, tea.KeyMsg{Type: tea.KeyDown})
 	view := m.View()
-	if !strings.Contains(view, "model: gpt-5-codex") { // still has exactly one detail line
+	if !strings.Contains(view, "› ○ Fix auth hook") {
 		t.Fatalf("expected cursor clamped at last row, view:\n%s", view)
 	}
 

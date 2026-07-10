@@ -137,6 +137,9 @@ func TestLoadThreads_EnrichesFromRolloutFile(t *testing.T) {
 	if got.TokenCount != 4210 {
 		t.Errorf("TokenCount = %d, want 4210", got.TokenCount)
 	}
+	if got.MessageCount != 0 {
+		t.Errorf("MessageCount = %d, want 0 (rollout has no event_msg records)", got.MessageCount)
+	}
 }
 
 func TestLoadThreads_EnrichesFirstMessageFromRolloutFile(t *testing.T) {
@@ -181,6 +184,9 @@ func TestLoadThreads_MissingRolloutFileLeavesEnrichmentUnknown(t *testing.T) {
 	}
 	if got.TokenCount != -1 {
 		t.Errorf("TokenCount = %d, want -1 (unknown)", got.TokenCount)
+	}
+	if got.MessageCount != -1 {
+		t.Errorf("MessageCount = %d, want -1 (unknown)", got.MessageCount)
 	}
 }
 

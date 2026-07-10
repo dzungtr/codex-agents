@@ -15,7 +15,7 @@ func TestComposer_IFocusesAndShowsDefaultProfile(t *testing.T) {
 	m := newFixtureModel()
 	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
 	view := m.View()
-	if !strings.Contains(view, "profile: general-agentic") {
+	if !strings.Contains(view, "[general-agentic]") {
 		t.Fatalf("expected composer to default to general-agentic, got:\n%s", view)
 	}
 }
@@ -35,15 +35,15 @@ func TestComposer_AtCyclesProfile(t *testing.T) {
 	m := newFixtureModel()
 	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
 	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("@")})
-	if !strings.Contains(m.View(), "profile: design-session") {
+	if !strings.Contains(m.View(), "[design-session]") {
 		t.Fatalf("expected profile to cycle to design-session, got:\n%s", m.View())
 	}
 	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("@")})
-	if !strings.Contains(m.View(), "profile: review") {
+	if !strings.Contains(m.View(), "[review]") {
 		t.Fatalf("expected profile to cycle to review, got:\n%s", m.View())
 	}
 	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("@")})
-	if !strings.Contains(m.View(), "profile: general-agentic") {
+	if !strings.Contains(m.View(), "[general-agentic]") {
 		t.Fatalf("expected profile to cycle back to general-agentic, got:\n%s", m.View())
 	}
 }
@@ -59,8 +59,10 @@ func TestComposer_EscCancelsAndClearsTask(t *testing.T) {
 	if strings.Contains(view, "fix bug") {
 		t.Fatalf("expected esc to discard composer task, got:\n%s", view)
 	}
-	if strings.Contains(view, "cycle profile") {
-		t.Fatalf("expected esc to close the composer entirely, got:\n%s", view)
+	// The composer bar is persistent (design drift gap 4), so "closed"
+	// means it reverts to the idle placeholder rather than disappearing.
+	if !strings.Contains(view, "Describe a task and press Enter to launch a thread") {
+		t.Fatalf("expected esc to revert the composer bar to its placeholder, got:\n%s", view)
 	}
 }
 
@@ -100,8 +102,15 @@ func TestComposer_EnterCallsLaunchWithTaskAndProfileThenCloses(t *testing.T) {
 	if gotTask != "fix bug" || gotProfile != "design-session" {
 		t.Fatalf("Launch called with (%q, %q), want (\"fix bug\", \"design-session\")", gotTask, gotProfile)
 	}
-	if strings.Contains(m.View(), "profile:") && strings.Contains(m.View(), "@ cycle") {
-		t.Fatalf("expected composer to close after submit, got:\n%s", m.View())
+	// The composer bar is persistent (design drift gap 4): "closed" means
+	// the task text clears and the profile resets, not that the bar itself
+	// disappears.
+	view := m.View()
+	if strings.Contains(view, "fix bug") {
+		t.Fatalf("expected composer task to clear after submit, got:\n%s", view)
+	}
+	if !strings.Contains(view, "[general-agentic]") {
+		t.Fatalf("expected composer profile to reset to general-agentic after submit, got:\n%s", view)
 	}
 }
 
