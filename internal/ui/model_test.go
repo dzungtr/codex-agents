@@ -102,26 +102,25 @@ func TestNew_OrdersByStatusGroupThenRecency(t *testing.T) {
 
 // TestModel_DetailLine_ShownOnlyForSelectedRow sends a wide WindowSizeMsg
 // first: issue #20 folds detail parts onto line 2 alongside metaColumn and
-// truncates that line to the terminal width (decision 8), and the fixture
-// row's full meta+detail text is ~109 runes — wider than the 80-fallback
-// budget (76) would allow without cutting off "tokens:"/"cwd:". A width
-// wide enough to hold it all keeps this test about "is the detail line
-// shown for the selected row", not about truncation, which has its own
-// coverage in view_test.go's TestRenderMetaLine_OverlongTruncatesNeverWraps.
+// truncates that line to the terminal width (decision 8). A wide terminal
+// keeps this test about "is the detail line shown for the selected row",
+// not about truncation, which has its own coverage in view_test.go's
+// TestRenderMetaLine_OverlongTruncatesNeverWraps.
 //
 // Design drift gap 3 moved model/profile out of the selected-only detail
-// line into a badge cluster shown on every row, so this test now checks
-// tokens/cwd stay selected-only while the model badge appears on all three
-// rows and the profile badge appears (only the first/selected row has a
-// known Profile in fixtureRows).
+// line into a badge cluster shown on every row, so this test checks tokens
+// stays selected-only (cwd used to live here too, but the composer-fidelity
+// fix dropped it from detailParts entirely — see detailParts' doc comment)
+// while the model badge appears on all three rows and the profile badge
+// appears (only the first/selected row has a known Profile in fixtureRows).
 func TestModel_DetailLine_ShownOnlyForSelectedRow(t *testing.T) {
 	m := newFixtureModel()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
 	m = updated.(Model)
 	view := m.View()
 
-	if !strings.Contains(view, "tokens: 8200") || !strings.Contains(view, "cwd: /Users/tony/web-app") {
-		t.Fatalf("expected tokens/cwd detail for the selected (first) row, got:\n%s", view)
+	if !strings.Contains(view, "tokens: 8200") {
+		t.Fatalf("expected tokens detail for the selected (first) row, got:\n%s", view)
 	}
 	if strings.Count(view, "tokens:") != 1 {
 		t.Fatalf("expected exactly one tokens: detail (only for the selected row), got:\n%s", view)
@@ -136,9 +135,10 @@ func TestModel_DetailLine_ShownOnlyForSelectedRow(t *testing.T) {
 
 // TestModel_DetailLine_UnknownFieldsOmitted: see the width note on
 // TestModel_DetailLine_ShownOnlyForSelectedRow above — same reasoning. The
-// drainer row (fixtureRows' t3) has a known Model but no Profile and a
-// negative MessageCount, so its badge cluster should show the model badge
-// alone; TokenCount is also unknown there, so tokens: stays omitted too.
+// drainer row (fixtureRows' t3) has a known Model but no Profile, a
+// negative MessageCount, and a negative TokenCount, so its badge cluster
+// should show the model badge alone and its detail line should show no
+// tokens: part at all — not even the previously-selected row's.
 func TestModel_DetailLine_UnknownFieldsOmitted(t *testing.T) {
 	m := newFixtureModel()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
@@ -147,9 +147,6 @@ func TestModel_DetailLine_UnknownFieldsOmitted(t *testing.T) {
 	m = updated.(Model)
 	view := m.View()
 
-	if !strings.Contains(view, "cwd: /Users/tony/infra-drainer") {
-		t.Fatalf("expected known cwd field for the drainer row, got:\n%s", view)
-	}
 	if strings.Contains(view, "tokens:") {
 		t.Fatalf("expected unknown tokens to be omitted, got:\n%s", view)
 	}

@@ -33,7 +33,10 @@ var (
 	// `.session-row.is-selected { background: var(--accent-soft) }` — a
 	// soft accent tint over the whole row, not the `›` cursor glyph alone
 	// (which is kept too, since it still helps in a colorless terminal).
-	selectedStyle = lipgloss.NewStyle().Background(lipgloss.Color("24"))
+	// Color 237 is a neutral elevated-surface gray, standing in for
+	// `--accent-soft`'s subtle ~14% tint — color 24 (a heavy saturated navy)
+	// read as a solid block rather than a soft wash (design drift gap 2).
+	selectedStyle = lipgloss.NewStyle().Background(lipgloss.Color("237"))
 	detailStyle   = lipgloss.NewStyle().Faint(true)
 	// badgeStyle renders the per-row model/profile badges: a muted color
 	// distinct from detailStyle's Faint so they read as a separate visual
@@ -54,6 +57,12 @@ var (
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderBottom(true).
 			BorderForeground(lipgloss.Color("240"))
+	// composerRuleStyle draws the horizontal rule above the composer bar,
+	// per the style contract's `.composer-wrap { border-top: 1px solid
+	// var(--border) }` (design drift gap 4's fourth gap) — same rule glyph
+	// and border color as titleBarStyle, standalone rather than attached to
+	// a box border since nothing above it needs enclosing.
+	composerRuleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 )
 
 func (m Model) View() string {
@@ -70,11 +79,22 @@ func (m Model) View() string {
 	}
 	b.WriteString("\n\n")
 	b.WriteString(m.listView())
-	b.WriteString("\n\n")
+	b.WriteString("\n")
+	b.WriteString(m.composerRule())
+	b.WriteString("\n")
 	b.WriteString(m.composerBar())
 	b.WriteString("\n")
 	b.WriteString(m.footerLine())
 	return b.String()
+}
+
+// composerRule renders the horizontal rule separating the list from the
+// composer bar (design drift gap 4's border-top) — see composerRuleStyle's
+// doc comment. It replaces what used to be a second blank line here, so the
+// separator reads as an intentional rule rather than adding to the vertical
+// gap.
+func (m Model) composerRule() string {
+	return composerRuleStyle.Render(strings.Repeat("─", m.listWidth()))
 }
 
 // titleBar renders the bordered title bar (issue: design drift gap 1):
@@ -358,20 +378,22 @@ func metaColumn(t codexstate.Thread) string {
 }
 
 // detailParts builds the selected row's detail parts from only the known
-// fields (tokens, cwd, in that fixed order), omitting unknown ones rather
-// than substituting a "-" placeholder — see PRD #19. "Unknown" means an
-// empty CWD, or a negative TokenCount (the data layer's explicit -1
-// sentinel; TokenCount == 0 is a known zero and still renders). Model and
-// Profile used to live here too, but design drift gap 3 moved them into
-// badgeClusterPlain's per-row badge cluster (shown on every row, not just
-// the selected one) — see its doc comment.
+// fields, omitting unknown ones rather than substituting a "-" placeholder
+// — see PRD #19. "Unknown" means a negative TokenCount (the data layer's
+// explicit -1 sentinel; TokenCount == 0 is a known zero and still renders).
+// Model and Profile used to live here too, but design drift gap 3 moved
+// them into badgeClusterPlain's per-row badge cluster (shown on every row,
+// not just the selected one) — see its doc comment. cwd used to live here
+// too: it crowded out the model/profile/msg-count badge cluster on the
+// selected row specifically (renderMetaLine truncates the left side to make
+// room for the right-hand badges, so a long cwd could push badges off
+// entirely) — making a *selected* row show *less* than an unselected one.
+// It's also redundant with the composer bar's "Launches detached in <dir>"
+// hint line, so it's dropped rather than truncated.
 func detailParts(t codexstate.Thread) []string {
 	var parts []string
 	if t.TokenCount >= 0 {
 		parts = append(parts, fmt.Sprintf("tokens: %d", t.TokenCount))
-	}
-	if t.CWD != "" {
-		parts = append(parts, "cwd: "+t.CWD)
 	}
 	return parts
 }
@@ -400,35 +422,154 @@ func badgeClusterPlain(t codexstate.Thread) string {
 	return strings.Join(parts, " ")
 }
 
+// composerMaxLines caps how many wrapped text lines composerBar shows
+// (mirroring the design's auto-growing-textarea intent while still bounding
+// it so a very long task can't push the footer off an already-short
+// terminal). Past this many lines, composerBar keeps the tail — the end,
+// where the cursor sits — rather than the head, on the theory that the
+// most relevant part of a long in-progress task is what's being typed now.
+const composerMaxLines = 6
+
 // composerBar renders the persistent composer bar pinned above the footer
 // (design drift gap 4): the mockup's composer-wrap is always visible at
 // the bottom of the window, not popped into the header only while focused.
-// It shows the live-typed task text with a trailing "_" cursor while
-// focused, a faint placeholder when idle and empty, the profile pill
-// (badgeStyle, matching the mockup's pill-styled model/profile tags —
-// there's no independent "model" selection in this composer, only the
-// profile cycle composer.go's `@` key drives, so only one pill is shown),
-// and the "Launches detached in <dir>" hint line. It only renders state;
-// composer.go's handleComposerKey still owns all composer key handling.
+// It word-wraps the live-typed task text to listWidth() instead of
+// emitting one unbounded line (issue: composer overflow) — mirroring the
+// design's auto-growing textarea. The profile pill (badgeStyle, matching
+// the mockup's pill-styled model/profile tags — there's no independent
+// "model" selection in this composer, only the profile cycle composer.go's
+// `@` key drives, so only one pill is shown) is reserved on line 1 and
+// right-aligned there via padding; continuation lines are indented two
+// columns (aligning under the text after "› ") and use the full width, no
+// pill. It shows a faint placeholder (unchanged, single line) when idle and
+// empty, and the "Launches detached in <dir>" hint line below either way.
+// It only renders state; composer.go's handleComposerKey still owns all
+// composer key handling.
 func (m Model) composerBar() string {
 	const placeholder = "Describe a task and press Enter to launch a thread…"
-	var content string
-	switch {
-	case m.composerFocused:
-		content = m.composerTask + "_"
-	case m.composerTask != "":
-		content = m.composerTask
-	default:
-		content = detailStyle.Render(placeholder)
-	}
-	profilePill := badgeStyle.Render("[" + m.composerProfile() + "]")
-	line := "› " + content + "  " + profilePill
+	width := m.listWidth()
+	pill := "[" + m.composerProfile() + "]"
+	pillWidth := len([]rune(pill))
+	renderedPill := badgeStyle.Render(pill)
 
 	hintText := "Launches detached — closing this window won't stop it."
 	if m.launchDir != "" {
 		hintText = fmt.Sprintf("Launches detached in %s — closing this window won't stop it.", m.launchDir)
 	}
-	return line + "\n" + detailStyle.Render(hintText)
+	hint := detailStyle.Render(hintText)
+
+	if !m.composerFocused && m.composerTask == "" {
+		// Idle+empty stays a single faint line, same shape as before this
+		// fix — truncate only bites in a narrower terminal than the
+		// placeholder already fits, which is the CRITICAL width rule (every
+		// rendered line <= listWidth()) rather than a behavior change.
+		budget := width - 2 - 2 - pillWidth
+		if budget < 0 {
+			budget = 0
+		}
+		text := truncate(placeholder, budget)
+		line := "› " + detailStyle.Render(text) + "  " + renderedPill
+		return line + "\n" + hint
+	}
+
+	text := m.composerTask
+	if m.composerFocused {
+		text += "_"
+	}
+
+	contWidth := width - 2
+	if contWidth < 1 {
+		contWidth = 1
+	}
+	firstWidth := width - 2 - 2 - pillWidth
+	if firstWidth < 1 {
+		firstWidth = 1
+	}
+
+	lines := wrapComposerText(text, firstWidth, contWidth)
+	if len(lines) > composerMaxLines {
+		lines = lines[len(lines)-composerMaxLines:]
+	}
+
+	first := lines[0]
+	if n := len([]rune(first)); n > firstWidth {
+		// Only reachable right after the tail-crop above: line 1 is now a
+		// formerly-continuation line wrapped at the wider contWidth, not
+		// the pill-reserving firstWidth budget it would have gotten as the
+		// true first line. Truncating the little that's left over here
+		// keeps the pill fitting and the CRITICAL width rule holding even
+		// in this rare very-long-task edge case.
+		first = truncate(first, firstWidth)
+	}
+	pad := firstWidth - len([]rune(first))
+	if pad < 0 {
+		pad = 0
+	}
+
+	var b strings.Builder
+	b.WriteString("› ")
+	b.WriteString(first)
+	b.WriteString(strings.Repeat(" ", pad))
+	b.WriteString("  ")
+	b.WriteString(renderedPill)
+	for _, l := range lines[1:] {
+		b.WriteString("\n  ")
+		b.WriteString(l)
+	}
+	b.WriteString("\n")
+	b.WriteString(hint)
+	return b.String()
+}
+
+// wrapComposerText word-wraps s into lines whose rune width never exceeds
+// firstWidth (line 1) or contWidth (every following line). It wraps on
+// whitespace boundaries where possible (strings.Fields, so runs of
+// whitespace collapse the same way composer.go's Space key already builds
+// them up one space at a time); a word wider than the width it would start
+// on doesn't get an exception — it hard-breaks rune-safe across as many
+// lines as it takes, same rune-safety rule as truncate. Always returns at
+// least one (possibly empty) line, so composerBar always has a first line
+// to attach the pill to.
+func wrapComposerText(s string, firstWidth, contWidth int) []string {
+	if firstWidth < 1 {
+		firstWidth = 1
+	}
+	if contWidth < 1 {
+		contWidth = 1
+	}
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return []string{""}
+	}
+
+	var lines []string
+	width := firstWidth
+	var cur []rune
+	for _, word := range words {
+		w := []rune(word)
+		for len(w) > 0 {
+			avail := width - len(cur)
+			if len(cur) > 0 {
+				avail-- // room for the separating space this word needs
+			}
+			if avail <= 0 {
+				lines = append(lines, string(cur))
+				cur = nil
+				width = contWidth
+				avail = width
+			} else if len(cur) > 0 {
+				cur = append(cur, ' ')
+			}
+			take := avail
+			if take > len(w) {
+				take = len(w)
+			}
+			cur = append(cur, w[:take]...)
+			w = w[take:]
+		}
+	}
+	lines = append(lines, string(cur))
+	return lines
 }
 
 func (m Model) footerLine() string {
