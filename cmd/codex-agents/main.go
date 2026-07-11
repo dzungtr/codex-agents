@@ -101,12 +101,13 @@ func run() error {
 	}
 
 	actions := ui.Actions{
-		Launch:     launchAction(launcher, startDir),
-		Attach:     attachAction(launcher),
-		Refresh:    refreshAction(codexHome, statePath),
-		QuickReply: quickReplyAction(launcher),
-		Interrupt:  interruptAction(launcher.Tmux, statePath),
-		Archive:    archiveAction(launcher, statePath),
+		Launch:        launchAction(launcher, startDir),
+		Attach:        attachAction(launcher),
+		Refresh:       refreshAction(codexHome, statePath),
+		QuickReply:    quickReplyAction(launcher),
+		Interrupt:     interruptAction(launcher.Tmux, statePath),
+		Archive:       archiveAction(launcher, statePath),
+		CheckLiveness: checkLivenessAction(statePath),
 	}
 
 	_, err = tea.NewProgram(ui.New(rows).WithActions(actions).WithLaunchDir(startDir), tea.WithAltScreen()).Run()
@@ -222,20 +223,47 @@ func launchAction(launcher *codexlaunch.Launcher, startDir string) func(task, pr
 	}
 }
 
+// needsResume reports whether attaching to row should first go through
+// Launcher.Resume rather than attaching directly: either the row is
+// already known to be closed, or — self-healing a stale row — its tmux
+// session has actually died despite the row's cached Status saying
+// otherwise (e.g. a race the launch-time liveness check and the delayed
+// ui.Actions.CheckLiveness recheck both missed). Attaching straight to a
+// dead session via tea.ExecProcess hands the terminal to tmux, which
+// prints its own "can't find session" error directly to the inherited
+// terminal and exits — bubbletea then redraws over it, so the error
+// flashes and vanishes (the reported bug's "looks like nothing happened"
+// symptom). Routing a stale row through Resume instead means the user
+// gets a working session (or, if Resume itself fails, a real persisted
+// error) rather than a flash.
+func needsResume(row ui.Row, session string, live tmuxstatus.LiveSet) bool {
+	if row.Status == tmuxstatus.StatusClosed {
+		return true
+	}
+	_, alive := live[session]
+	return !alive
+}
+
 // attachAction adapts tmux attach/resume into a ui.Actions.Attach hook.
-// For a closed thread it first spawns `codex resume <id>` into a managed
-// tmux session (Launcher.Resume), then attaches to whichever session now
-// exists — alive or freshly resumed — via tea.ExecProcess, which suspends
-// the bubbletea program for the duration of the interactive tmux client.
+// For a closed (or unexpectedly dead, see needsResume) thread it first
+// spawns `codex resume <id>` into a managed tmux session (Launcher.Resume),
+// then attaches to whichever session now exists — alive or freshly
+// resumed — via tea.ExecProcess, which suspends the bubbletea program for
+// the duration of the interactive tmux client.
 func attachAction(launcher *codexlaunch.Launcher) func(row ui.Row) tea.Cmd {
 	return func(row ui.Row) tea.Cmd {
-		if row.Status == tmuxstatus.StatusClosed {
+		session := tmuxstatus.SessionName(row.Thread.ID)
+
+		// Best-effort: a ListLiveSessions failure just skips the self-heal
+		// check below (needsResume then falls back to row.Status alone,
+		// same as before this existed).
+		live, _ := tmuxstatus.ListLiveSessions()
+		if needsResume(row, session, tmuxstatus.NewLiveSet(live)) {
 			if _, err := launcher.Resume(row.Thread.ID, row.Thread.CWD); err != nil {
 				return func() tea.Msg { return ui.ThreadLaunchErrorMsg{Err: err} }
 			}
 		}
 
-		session := tmuxstatus.SessionName(row.Thread.ID)
 		var args []string
 		if tmuxstatus.InsideTmux() {
 			args = tmuxstatus.SwitchClientArgs(session)
@@ -264,6 +292,40 @@ func quickReplyAction(launcher *codexlaunch.Launcher) func(threadID, text string
 				return ui.ThreadLaunchErrorMsg{Err: err}
 			}
 			return ui.QuickReplySentMsg{ThreadID: threadID}
+		}
+	}
+}
+
+// livenessRecheckDelay is how long checkLivenessAction waits before
+// re-deriving a just-launched thread's tmux-liveness status. Long enough
+// to catch a codex process that starts fine but dies shortly after (e.g.
+// an auth failure surfaced only once it reaches the model) — slower than
+// the sub-second window codexlaunch.Launcher.verifyAlive already polls
+// during Launch itself, which only catches near-instant deaths (missing
+// binary, bad flags). Short enough that a genuinely dead thread doesn't
+// sit showing "working" for long. A var (not a const) so tests can shrink
+// it rather than actually waiting out the production delay.
+var livenessRecheckDelay = 2 * time.Second
+
+// checkLivenessAction adapts a delayed, single-thread tmux-liveness
+// recheck into a ui.Actions.CheckLiveness hook (see that field's doc
+// comment for why this is narrower than the Refresh action other
+// post-action messages use: codex may not have written this thread's own
+// record yet, so a full reload could drop the freshly-launched row
+// outright instead of correcting its status).
+func checkLivenessAction(statePath string) func(threadID string) tea.Cmd {
+	return func(threadID string) tea.Cmd {
+		return func() tea.Msg {
+			time.Sleep(livenessRecheckDelay)
+			live, err := tmuxstatus.ListLiveSessions()
+			if err != nil {
+				// Best-effort: a transient tmux query failure shouldn't
+				// disrupt the freshly-launched row's optimistic status.
+				return nil
+			}
+			turnEnded := loadTurnEndedByThread(statePath)
+			status := tmuxstatus.StatusFor(threadID, tmuxstatus.NewLiveSet(live), turnEnded[threadID])
+			return ui.ThreadLivenessMsg{ThreadID: threadID, Status: status}
 		}
 	}
 }

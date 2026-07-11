@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -73,6 +74,37 @@ func TestKillSessionArgs(t *testing.T) {
 	want := []string{"kill-session", "-t", "cxa-abcd1234"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("KillSessionArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestRemainOnExitArgs(t *testing.T) {
+	got := RemainOnExitArgs()
+	want := []string{"set-option", "-g", "remain-on-exit", "on"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("RemainOnExitArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestChainArgs(t *testing.T) {
+	got := ChainArgs(
+		RemainOnExitArgs(),
+		NewSessionArgs("cxa-abcd1234", "/repo", []string{"codex", "do it"}),
+	)
+	want := []string{
+		"set-option", "-g", "remain-on-exit", "on",
+		";",
+		"new-session", "-d", "-s", "cxa-abcd1234", "-c", "/repo", "codex", "do it",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ChainArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestChainArgs_SingleGroupNoSeparator(t *testing.T) {
+	got := ChainArgs(KillSessionArgs("cxa-abcd1234"))
+	want := []string{"kill-session", "-t", "cxa-abcd1234"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ChainArgs() = %v, want %v", got, want)
 	}
 }
 
@@ -186,5 +218,80 @@ func TestQuickReply_RealTmux_DeliversTextAndSubmits(t *testing.T) {
 	}
 	if string(got) != text {
 		t.Fatalf("delivered text = %q, want %q (send-keys delivery unreliable)", got, text)
+	}
+}
+
+// TestInspectPane_RealTmux_AliveThenDead exercises the exact race this
+// package's remain-on-exit/InspectPane pair exists to catch: a pane whose
+// command exits almost immediately. Without remain-on-exit set first,
+// tmux would tear the session down the instant the command exits, and
+// list-panes below would simply fail with "session not found" instead of
+// reporting a dead pane. Skips gracefully when tmux isn't installed.
+func TestInspectPane_RealTmux_AliveThenDead(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed in this environment")
+	}
+
+	const session = "cxa-testinspectpane"
+	runner := ExecRunner{}
+	_ = runner.Run([]string{"kill-session", "-t", session})
+
+	// exit 7 after printing something, so we can assert both the exit code
+	// and that captured output carries diagnostic content. remain-on-exit
+	// must be chained into the same invocation as new-session (see
+	// RemainOnExitArgs's doc comment) rather than set beforehand.
+	chained := ChainArgs(RemainOnExitArgs(), NewSessionArgs(session, ".", []string{"sh", "-c", "echo boom; exit 7"}))
+	if err := runner.Run(chained); err != nil {
+		t.Fatalf("start detached session: %v", err)
+	}
+	defer runner.Run([]string{"kill-session", "-t", session})
+
+	var state PaneState
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var err error
+		state, err = InspectPane(session)
+		if err != nil {
+			t.Fatalf("InspectPane: %v", err)
+		}
+		if state.Dead {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if !state.Dead {
+		t.Fatalf("expected pane to be reported dead within the deadline, got %+v", state)
+	}
+	if state.ExitCode != 7 {
+		t.Errorf("ExitCode = %d, want 7", state.ExitCode)
+	}
+	if !strings.Contains(state.Output, "boom") {
+		t.Errorf("Output = %q, want it to contain %q", state.Output, "boom")
+	}
+}
+
+// TestInspectPane_RealTmux_AliveCommandReportsNotDead confirms InspectPane
+// doesn't false-positive a still-running command as dead.
+func TestInspectPane_RealTmux_AliveCommandReportsNotDead(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed in this environment")
+	}
+
+	const session = "cxa-testinspectpanealive"
+	runner := ExecRunner{}
+	_ = runner.Run([]string{"kill-session", "-t", session})
+	chained := ChainArgs(RemainOnExitArgs(), NewSessionArgs(session, ".", []string{"sleep", "5"}))
+	if err := runner.Run(chained); err != nil {
+		t.Fatalf("start detached session: %v", err)
+	}
+	defer runner.Run([]string{"kill-session", "-t", session})
+
+	state, err := InspectPane(session)
+	if err != nil {
+		t.Fatalf("InspectPane: %v", err)
+	}
+	if state.Dead {
+		t.Fatalf("expected a still-running command to report Dead=false, got %+v", state)
 	}
 }

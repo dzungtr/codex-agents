@@ -170,6 +170,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyFilter()
 		m.selectThreadID(row.Thread.ID)
 		m.statusLine = "launched " + displayTitle(row.Thread)
+		if m.actions.CheckLiveness != nil {
+			return m, m.actions.CheckLiveness(row.Thread.ID)
+		}
+		return m, nil
+	case ThreadLivenessMsg:
+		// Patches just this one row's Status in place rather than doing a
+		// full Refresh (see Actions.CheckLiveness's doc comment for why a
+		// full reload is unsafe this soon after launch).
+		for i := range m.rows {
+			if m.rows[i].Thread.ID == msg.ThreadID {
+				if m.rows[i].Status != msg.Status {
+					m.rows[i].Status = msg.Status
+					sortRows(m.rows)
+					m.applyFilter()
+				}
+				break
+			}
+		}
 		return m, nil
 	case ThreadLaunchErrorMsg:
 		m.statusLine = "error: " + msg.Err.Error()

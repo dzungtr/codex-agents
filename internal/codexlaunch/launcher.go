@@ -3,12 +3,23 @@ package codexlaunch
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/dzungtr/codex-agents/internal/agentstate"
 	"github.com/dzungtr/codex-agents/internal/notifyhook"
 	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
+)
+
+// defaultLivenessAttempts/defaultLivenessInterval bound verifyAlive's
+// total polling window (5 x 60ms = 300ms) added to every Launch/Resume: a
+// missing binary or bad flag reliably kills the pane's command within a
+// handful of milliseconds, well inside this window, without adding a
+// noticeable delay to a healthy launch.
+const (
+	defaultLivenessAttempts = 5
+	defaultLivenessInterval = 60 * time.Millisecond
 )
 
 // Launcher ties together workspace resolution (worktree-per-thread),
@@ -37,6 +48,24 @@ type Launcher struct {
 	// determinism. If resolution fails, Launch degrades gracefully by
 	// omitting the notify hook entirely rather than failing the launch.
 	ExecutablePath func() (string, error)
+	// InspectPane checks a freshly created session's pane liveness right
+	// after Launch/Resume starts it (see verifyAlive) — catching a `tmux
+	// new-session -d` that reported success only because tmux itself
+	// accepted the command, while the pane's own command (codex) had
+	// already died. Defaults to tmuxstatus.InspectPane; tests override to
+	// avoid depending on a real tmux server and to exercise the dead-pane
+	// path deterministically.
+	InspectPane func(session string) (tmuxstatus.PaneState, error)
+	// Sleep is the delay verifyAlive uses between poll attempts. Defaults
+	// to time.Sleep; tests override to a no-op (or a recording stub) so
+	// the suite doesn't actually wait out the polling window.
+	Sleep func(time.Duration)
+	// LivenessAttempts and LivenessInterval configure verifyAlive's poll
+	// budget. Zero (the default) means "use defaultLivenessAttempts /
+	// defaultLivenessInterval"; tests override for a tighter/deterministic
+	// budget.
+	LivenessAttempts int
+	LivenessInterval time.Duration
 }
 
 func (l *Launcher) newThreadID() string {
@@ -51,6 +80,71 @@ func (l *Launcher) executablePath() (string, error) {
 		return l.ExecutablePath()
 	}
 	return os.Executable()
+}
+
+func (l *Launcher) inspectPane() func(string) (tmuxstatus.PaneState, error) {
+	if l.InspectPane != nil {
+		return l.InspectPane
+	}
+	return tmuxstatus.InspectPane
+}
+
+func (l *Launcher) sleep() func(time.Duration) {
+	if l.Sleep != nil {
+		return l.Sleep
+	}
+	return time.Sleep
+}
+
+func (l *Launcher) livenessAttempts() int {
+	if l.LivenessAttempts > 0 {
+		return l.LivenessAttempts
+	}
+	return defaultLivenessAttempts
+}
+
+func (l *Launcher) livenessInterval() time.Duration {
+	if l.LivenessInterval > 0 {
+		return l.LivenessInterval
+	}
+	return defaultLivenessInterval
+}
+
+// verifyAlive polls session's pane a few times right after new-session/
+// resume returns, closing the race where `tmux new-session -d` reports
+// success the instant tmux itself accepts the command line — before the
+// pane's own process (codex) has had any chance to prove it didn't just
+// immediately exit (missing binary, bad profile/model flags, etc). The
+// session must already have remain-on-exit set (see
+// tmuxstatus.RemainOnExitArgs) or a dead pane tears its session down
+// before this can observe it.
+//
+// Returns an error carrying whatever diagnostic pane output is available
+// the moment the pane is ever observed dead (or the moment InspectPane
+// itself errors, e.g. because the session doesn't exist at all — also
+// evidence of death). Returns nil once the poll budget is exhausted
+// without ever seeing that, treating the pane as alive: a healthy launch
+// keeps running well past this window, so its absence within the window
+// isn't proof of anything by itself.
+func (l *Launcher) verifyAlive(session string) error {
+	inspect := l.inspectPane()
+	sleep := l.sleep()
+	attempts := l.livenessAttempts()
+	interval := l.livenessInterval()
+
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			sleep(interval)
+		}
+		state, err := inspect(session)
+		if err != nil {
+			return fmt.Errorf("codexlaunch: launched session died immediately: %w", err)
+		}
+		if state.Dead {
+			return fmt.Errorf("codexlaunch: launched command exited immediately (exit %d): %s", state.ExitCode, state.Output)
+		}
+	}
+	return nil
 }
 
 // notifyArgsFor builds the `-c notify=[...]` argv for a freshly launched
@@ -109,10 +203,14 @@ func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 	session := tmuxstatus.SessionName(threadID)
 	notifyArgs := l.notifyArgsFor(threadID, profile)
 	codexArgs := NewThreadArgs(NewThreadSpec{Profile: profile, Model: req.Model, Task: req.Task, Notify: notifyArgs})
-	tmuxArgs := tmuxstatus.NewSessionArgs(session, ws.WorkDir, codexArgs)
+	tmuxArgs := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.NewSessionArgs(session, ws.WorkDir, codexArgs))
 
 	if err := l.Tmux.Run(tmuxArgs); err != nil {
 		return LaunchResult{}, fmt.Errorf("codexlaunch: start tmux session: %w", err)
+	}
+	if err := l.verifyAlive(session); err != nil {
+		_ = l.Tmux.Run(tmuxstatus.KillSessionArgs(session))
+		return LaunchResult{}, err
 	}
 
 	entry := agentstate.Entry{
@@ -154,9 +252,13 @@ func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 // event behind.
 func (l *Launcher) Resume(threadID, cwd string) (LaunchResult, error) {
 	session := tmuxstatus.SessionName(threadID)
-	tmuxArgs := tmuxstatus.NewSessionArgs(session, cwd, ResumeArgs(threadID))
+	tmuxArgs := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.NewSessionArgs(session, cwd, ResumeArgs(threadID)))
 	if err := l.Tmux.Run(tmuxArgs); err != nil {
 		return LaunchResult{}, fmt.Errorf("codexlaunch: start resume tmux session: %w", err)
+	}
+	if err := l.verifyAlive(session); err != nil {
+		_ = l.Tmux.Run(tmuxstatus.KillSessionArgs(session))
+		return LaunchResult{}, err
 	}
 
 	st, err := agentstate.Load(l.StatePath)

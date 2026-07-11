@@ -3,9 +3,11 @@ package main
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dzungtr/codex-agents/internal/agentstate"
 	"github.com/dzungtr/codex-agents/internal/codexlaunch"
@@ -137,6 +139,94 @@ type fakeTmuxRunner struct {
 func (f *fakeTmuxRunner) Run(args []string) error {
 	f.calls = append(f.calls, append([]string(nil), args...))
 	return f.err
+}
+
+func TestNeedsResume_ClosedRow_AlwaysTrue(t *testing.T) {
+	row := ui.Row{Thread: rowThread("t1", "x"), Status: tmuxstatus.StatusClosed}
+	// Even if the live set somehow contains the session, a row the cockpit
+	// already believes is closed always resumes rather than attaching
+	// directly.
+	live := tmuxstatus.NewLiveSet([]string{tmuxstatus.SessionName("t1")})
+	if !needsResume(row, tmuxstatus.SessionName("t1"), live) {
+		t.Errorf("expected needsResume=true for a StatusClosed row")
+	}
+}
+
+func TestNeedsResume_AliveRowWithLiveSession_False(t *testing.T) {
+	row := ui.Row{Thread: rowThread("t1", "x"), Status: tmuxstatus.StatusWorking}
+	session := tmuxstatus.SessionName("t1")
+	live := tmuxstatus.NewLiveSet([]string{session})
+	if needsResume(row, session, live) {
+		t.Errorf("expected needsResume=false when the row's session is actually alive")
+	}
+}
+
+// TestNeedsResume_AliveRowButSessionMissing_True is the self-heal case
+// this fix adds: a row cached as Working/Waiting whose tmux session has
+// actually already died (e.g. a race the launch-time and delayed
+// liveness checks both missed) should route through Resume instead of
+// attaching straight into a dead session.
+func TestNeedsResume_AliveRowButSessionMissing_True(t *testing.T) {
+	row := ui.Row{Thread: rowThread("t1", "x"), Status: tmuxstatus.StatusWaiting}
+	session := tmuxstatus.SessionName("t1")
+	live := tmuxstatus.NewLiveSet([]string{"cxa-someoneelse"})
+	if !needsResume(row, session, live) {
+		t.Errorf("expected needsResume=true when the row's status is stale and its session is actually gone")
+	}
+}
+
+func TestCheckLivenessAction_RealTmux_ReportsClosedForANeverCreatedSession(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed in this environment")
+	}
+	origDelay := livenessRecheckDelay
+	livenessRecheckDelay = 10 * time.Millisecond
+	t.Cleanup(func() { livenessRecheckDelay = origDelay })
+
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	action := checkLivenessAction(statePath)
+
+	msg := action("thread-that-never-launched")()
+	liveness, ok := msg.(ui.ThreadLivenessMsg)
+	if !ok {
+		t.Fatalf("expected ui.ThreadLivenessMsg, got %#v", msg)
+	}
+	if liveness.ThreadID != "thread-that-never-launched" {
+		t.Errorf("ThreadID = %q, want thread-that-never-launched", liveness.ThreadID)
+	}
+	if liveness.Status != tmuxstatus.StatusClosed {
+		t.Errorf("Status = %v, want StatusClosed for a session that was never created", liveness.Status)
+	}
+}
+
+func TestCheckLivenessAction_RealTmux_ReportsWorkingWhileSessionAlive(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed in this environment")
+	}
+	origDelay := livenessRecheckDelay
+	livenessRecheckDelay = 10 * time.Millisecond
+	t.Cleanup(func() { livenessRecheckDelay = origDelay })
+
+	const threadID = "fedcba9876543210"
+	session := tmuxstatus.SessionName(threadID)
+	runner := tmuxstatus.ExecRunner{}
+	_ = runner.Run(tmuxstatus.KillSessionArgs(session))
+	if err := runner.Run(tmuxstatus.NewSessionArgs(session, ".", []string{"sleep", "5"})); err != nil {
+		t.Fatalf("start detached session: %v", err)
+	}
+	t.Cleanup(func() { runner.Run(tmuxstatus.KillSessionArgs(session)) })
+
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	action := checkLivenessAction(statePath)
+
+	msg := action(threadID)()
+	liveness, ok := msg.(ui.ThreadLivenessMsg)
+	if !ok {
+		t.Fatalf("expected ui.ThreadLivenessMsg, got %#v", msg)
+	}
+	if liveness.Status != tmuxstatus.StatusWorking {
+		t.Errorf("Status = %v, want StatusWorking for a still-alive session", liveness.Status)
+	}
 }
 
 func TestInterruptAction_AliveThread_SendsCtrlCAndRecordsTurnEnded(t *testing.T) {

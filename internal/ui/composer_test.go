@@ -140,6 +140,87 @@ func TestUpdate_ThreadLaunchedMsg_InsertsRowAtTopOfWorkingGroup(t *testing.T) {
 	}
 }
 
+// TestUpdate_ThreadLaunchedMsg_TriggersCheckLiveness reflects the fix for
+// "compose task -> Enter -> row stays stuck showing working forever even
+// after the tmux session has already died": the optimistic insert can't
+// safely be followed by a full Refresh (codex may not have written this
+// thread's own record yet, and Refresh replaces the whole row set from
+// that record — see Actions.CheckLiveness's doc comment), so a launch
+// instead schedules a narrower liveness recheck for just this thread.
+func TestUpdate_ThreadLaunchedMsg_TriggersCheckLiveness(t *testing.T) {
+	var gotThreadID string
+	called := false
+	actions := Actions{CheckLiveness: func(threadID string) tea.Cmd {
+		called = true
+		gotThreadID = threadID
+		return func() tea.Msg { return ThreadLivenessMsg{ThreadID: threadID, Status: tmuxstatus.StatusClosed} }
+	}}
+	m := newFixtureModel().WithActions(actions)
+	newRow := Row{Thread: codexstate.Thread{ID: "new1", Title: "Brand new thread"}, Status: tmuxstatus.StatusWorking}
+	updated, cmd := m.Update(ThreadLaunchedMsg{Row: newRow})
+	_ = updated.(Model)
+	if !called {
+		t.Fatalf("expected ThreadLaunchedMsg to trigger CheckLiveness")
+	}
+	if cmd == nil {
+		t.Fatalf("expected a non-nil Cmd from ThreadLaunchedMsg")
+	}
+	if gotThreadID != "new1" {
+		t.Fatalf("CheckLiveness called with %q, want new1", gotThreadID)
+	}
+}
+
+func TestUpdate_ThreadLaunchedMsg_WithoutCheckLivenessIsStillANoopCmd(t *testing.T) {
+	m := newFixtureModel()
+	newRow := Row{Thread: codexstate.Thread{ID: "new1", Title: "Brand new thread"}, Status: tmuxstatus.StatusWorking}
+	updated, cmd := m.Update(ThreadLaunchedMsg{Row: newRow})
+	_ = updated.(Model)
+	if cmd != nil {
+		t.Fatalf("expected no cmd when Actions.CheckLiveness is unset")
+	}
+}
+
+// TestUpdate_ThreadLivenessMsg_UpdatesJustThatRowsStatus is the other half
+// of the fix: once CheckLiveness reports the thread actually died, the row
+// should flip to Closed in place — not disappear (unlike a RowsRefreshedMsg
+// replace) and not require a full reload.
+func TestUpdate_ThreadLivenessMsg_UpdatesJustThatRowsStatus(t *testing.T) {
+	m := newFixtureModel()
+	// t2 ("Add dark mode") is StatusWaiting in the fixture; assert only its
+	// Status field flips, everything else about the list stays put.
+	updated, cmd := m.Update(ThreadLivenessMsg{ThreadID: "t2", Status: tmuxstatus.StatusClosed})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Fatalf("expected ThreadLivenessMsg to yield no further Cmd, got %v", cmd)
+	}
+	view := m.View()
+	if !strings.Contains(view, "Add dark mode") {
+		t.Fatalf("expected the row to remain in the list, got:\n%s", view)
+	}
+	found := false
+	for _, r := range m.rows {
+		if r.Thread.ID == "t2" {
+			found = true
+			if r.Status != tmuxstatus.StatusClosed {
+				t.Fatalf("expected t2's Status to become Closed, got %v", r.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected row t2 to still be present")
+	}
+}
+
+func TestUpdate_ThreadLivenessMsg_UnknownThreadIDIsNoop(t *testing.T) {
+	m := newFixtureModel()
+	before := append([]Row(nil), m.rows...)
+	updated, _ := m.Update(ThreadLivenessMsg{ThreadID: "does-not-exist", Status: tmuxstatus.StatusClosed})
+	m = updated.(Model)
+	if len(m.rows) != len(before) {
+		t.Fatalf("expected row count unchanged, got %d want %d", len(m.rows), len(before))
+	}
+}
+
 func TestUpdate_ThreadLaunchErrorMsg_ShowsErrorLine(t *testing.T) {
 	m := newFixtureModel()
 	updated, _ := m.Update(ThreadLaunchErrorMsg{Err: errors.New("boom")})

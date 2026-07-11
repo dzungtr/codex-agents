@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
 )
 
 // Actions are the side-effecting operations the list screen can trigger.
@@ -49,6 +51,17 @@ type Actions struct {
 	// worktree removal per PRD #1's List behavior -> Archive row. Returns
 	// a Cmd that yields ArchiveDoneMsg or ThreadLaunchErrorMsg.
 	Archive func(row Row) tea.Cmd
+
+	// CheckLiveness re-derives threadID's tmux-liveness status shortly
+	// after a Launch, so a thread that died moments after its
+	// ThreadLaunchedMsg row was optimistically inserted doesn't keep
+	// reading as StatusWorking forever. Deliberately narrower than a full
+	// Refresh: codex may not have written this thread's own record yet,
+	// and Refresh replaces the whole row set from that record — calling it
+	// this soon after launch could drop the freshly-launched row outright
+	// instead of correcting its status. Returns a Cmd that yields
+	// ThreadLivenessMsg.
+	CheckLiveness func(threadID string) tea.Cmd
 }
 
 // ThreadLaunchedMsg reports a successful composer launch. Row is inserted
@@ -84,6 +97,14 @@ type InterruptDoneMsg struct{ ThreadID string }
 type ArchiveDoneMsg struct {
 	ThreadID string
 	Note     string
+}
+
+// ThreadLivenessMsg carries a freshly re-derived tmux-liveness Status for
+// ThreadID (see Actions.CheckLiveness), used to correct a launched row that
+// died shortly after its optimistic ThreadLaunchedMsg insert.
+type ThreadLivenessMsg struct {
+	ThreadID string
+	Status   tmuxstatus.Status
 }
 
 // composerProfiles is the fixed profile cycle offered by the composer's

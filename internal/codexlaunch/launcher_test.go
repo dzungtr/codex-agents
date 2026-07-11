@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dzungtr/codex-agents/internal/agentstate"
 	"github.com/dzungtr/codex-agents/internal/notifyhook"
@@ -45,6 +46,12 @@ func newTestLauncher(t *testing.T, git GitRunner, tmux tmuxstatus.Runner, ids []
 		// ExistingNotifyCommand always returns nil, so notify wrapper args
 		// never include a forward command unless a test opts in.
 		ExecutablePath: func() (string, error) { return "/opt/codex-agents/codex-agents", nil },
+		// A fake InspectPane reporting "always alive" plus a no-op Sleep
+		// decouples the rest of this suite from the post-launch liveness
+		// poll (and from needing a real tmux server) unless a test opts
+		// into exercising that behavior directly.
+		InspectPane: func(string) (tmuxstatus.PaneState, error) { return tmuxstatus.PaneState{Dead: false}, nil },
+		Sleep:       func(time.Duration) {},
 	}, statePath
 }
 
@@ -82,7 +89,7 @@ func TestLaunch_GitRepo_CreatesWorktreeAndTmuxSessionAndState(t *testing.T) {
 	got := tmux.calls[0]
 	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", res.ThreadID, notifyhook.DefaultEventsPath(statePath), nil)
 	wantCodexArgs := NewThreadArgs(NewThreadSpec{Profile: "general-agentic", Task: "Fix auth hook", Notify: wantNotify})
-	want := tmuxstatus.NewSessionArgs(wantSession, wantDir, wantCodexArgs)
+	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.NewSessionArgs(wantSession, wantDir, wantCodexArgs))
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("tmux call = %v, want %v", got, want)
 	}
@@ -138,7 +145,7 @@ func TestLaunch_ChainsExistingNotifyCommandFromProfileConfig(t *testing.T) {
 
 	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", res.ThreadID, notifyhook.DefaultEventsPath(statePath), []string{"/usr/bin/terminal-notifier", "-title", "codex"})
 	wantCodexArgs := NewThreadArgs(NewThreadSpec{Profile: "general-agentic", Task: "do a thing", Notify: wantNotify})
-	want := tmuxstatus.NewSessionArgs(tmuxstatus.SessionName(res.ThreadID), "/plain", wantCodexArgs)
+	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.NewSessionArgs(tmuxstatus.SessionName(res.ThreadID), "/plain", wantCodexArgs))
 	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {
 		t.Errorf("tmux call = %v, want %v (expected the profile's existing notify command chained in)", tmux.calls[0], want)
 	}
@@ -225,7 +232,7 @@ func TestResume_ReusesThreadIDAndUpdatesState(t *testing.T) {
 	if len(tmux.calls) != 1 {
 		t.Fatalf("expected one tmux call, got %v", tmux.calls)
 	}
-	want := tmuxstatus.NewSessionArgs(wantSession, "/repo/.worktrees/fix-auth-hook", ResumeArgs("existing-thread-id"))
+	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.NewSessionArgs(wantSession, "/repo/.worktrees/fix-auth-hook", ResumeArgs("existing-thread-id")))
 	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {
 		t.Errorf("tmux call = %v, want %v", tmux.calls[0], want)
 	}
@@ -236,6 +243,107 @@ func TestResume_ReusesThreadIDAndUpdatesState(t *testing.T) {
 	}
 	if st.Threads["existing-thread-id"].TmuxSession != wantSession {
 		t.Errorf("expected state updated with resumed session, got %+v", st.Threads["existing-thread-id"])
+	}
+}
+
+func TestLaunch_ReturnsErrorAndDoesNotWriteState_WhenPaneDiesImmediately(t *testing.T) {
+	git := &fakeGitRunner{responses: map[string]fakeGitResponse{
+		"[rev-parse --show-toplevel]": {err: fmt.Errorf("not a repo")},
+	}}
+	tmux := &fakeTmuxRunner{}
+	l, statePath := newTestLauncher(t, git, tmux, []string{"threadid1"})
+	l.InspectPane = func(session string) (tmuxstatus.PaneState, error) {
+		return tmuxstatus.PaneState{Dead: true, ExitCode: 127, Output: "codex: command not found"}, nil
+	}
+
+	_, err := l.Launch(LaunchRequest{StartDir: "/plain", Task: "do a thing"})
+	if err == nil {
+		t.Fatalf("expected Launch to fail when the pane died immediately")
+	}
+	if !strings.Contains(err.Error(), "127") || !strings.Contains(err.Error(), "command not found") {
+		t.Errorf("error = %q, want it to carry the exit code and captured output", err.Error())
+	}
+
+	st, loadErr := agentstate.Load(statePath)
+	if loadErr != nil {
+		t.Fatalf("Load state: %v", loadErr)
+	}
+	if len(st.Threads) != 0 {
+		t.Fatalf("expected no state entries after a dead-pane launch, got %v", st.Threads)
+	}
+
+	if len(tmux.calls) != 2 {
+		t.Fatalf("expected new-session + a cleanup kill-session call, got %v", tmux.calls)
+	}
+	wantSession := tmuxstatus.SessionName("threadid1")
+	wantCleanup := tmuxstatus.KillSessionArgs(wantSession)
+	if fmt.Sprint(tmux.calls[1]) != fmt.Sprint(wantCleanup) {
+		t.Errorf("cleanup call = %v, want %v", tmux.calls[1], wantCleanup)
+	}
+}
+
+func TestLaunch_TreatsInspectPaneErrorAsDeath(t *testing.T) {
+	git := &fakeGitRunner{responses: map[string]fakeGitResponse{
+		"[rev-parse --show-toplevel]": {err: fmt.Errorf("not a repo")},
+	}}
+	tmux := &fakeTmuxRunner{}
+	l, _ := newTestLauncher(t, git, tmux, []string{"threadid1"})
+	l.InspectPane = func(session string) (tmuxstatus.PaneState, error) {
+		return tmuxstatus.PaneState{}, fmt.Errorf("no such session")
+	}
+
+	if _, err := l.Launch(LaunchRequest{StartDir: "/plain", Task: "do a thing"}); err == nil {
+		t.Fatalf("expected Launch to fail when InspectPane itself errors")
+	}
+}
+
+func TestLaunch_PollsInspectPaneUpToBudgetBeforeSucceeding(t *testing.T) {
+	git := &fakeGitRunner{responses: map[string]fakeGitResponse{
+		"[rev-parse --show-toplevel]": {err: fmt.Errorf("not a repo")},
+	}}
+	tmux := &fakeTmuxRunner{}
+	l, _ := newTestLauncher(t, git, tmux, []string{"threadid1"})
+	l.LivenessAttempts = 3
+	l.LivenessInterval = time.Millisecond
+
+	var inspectCalls, sleepCalls int
+	l.InspectPane = func(string) (tmuxstatus.PaneState, error) {
+		inspectCalls++
+		return tmuxstatus.PaneState{Dead: false}, nil
+	}
+	l.Sleep = func(time.Duration) { sleepCalls++ }
+
+	if _, err := l.Launch(LaunchRequest{StartDir: "/plain", Task: "do a thing"}); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if inspectCalls != 3 {
+		t.Errorf("InspectPane called %d times, want 3 (LivenessAttempts)", inspectCalls)
+	}
+	if sleepCalls != 2 {
+		t.Errorf("Sleep called %d times, want 2 (attempts-1)", sleepCalls)
+	}
+}
+
+func TestResume_ReturnsErrorAndDoesNotUpdateState_WhenPaneDiesImmediately(t *testing.T) {
+	tmux := &fakeTmuxRunner{}
+	l, statePath := newTestLauncher(t, nil, tmux, nil)
+	if err := agentstate.Upsert(statePath, "t1", agentstate.Entry{Profile: "review", WorktreePath: "/repo/.worktrees/t1"}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	l.InspectPane = func(string) (tmuxstatus.PaneState, error) {
+		return tmuxstatus.PaneState{Dead: true, ExitCode: 1, Output: "codex: no such thread"}, nil
+	}
+
+	if _, err := l.Resume("t1", "/repo/.worktrees/t1"); err == nil {
+		t.Fatalf("expected Resume to fail when the pane died immediately")
+	}
+
+	st, err := agentstate.Load(statePath)
+	if err != nil {
+		t.Fatalf("Load state: %v", err)
+	}
+	if st.Threads["t1"].TmuxSession != "" {
+		t.Errorf("expected state left untouched (no TmuxSession recorded) after a dead-pane resume, got %+v", st.Threads["t1"])
 	}
 }
 
