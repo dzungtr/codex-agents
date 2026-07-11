@@ -3,12 +3,12 @@
 3 threads · 1 waiting · 1 working
 
 › ● Add dark mode                                                             3m
-    web-app · add-dark-mode  cwd: /Users/tony/web-app              [gpt-5-codex]
+    web-app · add-dark-mode                                        [gpt-5-codex]
   ◐ please refactor the drainer so it retries network calls with backoff a…  45m
     infra-drainer · refactor-drainer                               [gpt-5-codex]
   ○                                                                           1d
     web-app · fix-auth-hook                                        [gpt-5-codex]
-
+────────────────────────────────────────────────────────────────────────────────
 › Describe a task and press Enter to launch a thread…  [general-agentic]
 Launches detached — closing this window won't stop it.
 ↑/k ↓/j navigate    enter attach    i compose    r reply    x interrupt    a archive    / filter    ? help    q quit

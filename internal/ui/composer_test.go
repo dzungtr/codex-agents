@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -45,6 +46,66 @@ func TestComposer_AtCyclesProfile(t *testing.T) {
 	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("@")})
 	if !strings.Contains(m.View(), "[general-agentic]") {
 		t.Fatalf("expected profile to cycle back to general-agentic, got:\n%s", m.View())
+	}
+}
+
+// TestComposer_LongTaskWrapsWithinListWidth covers the composer-overflow
+// fix: a typed task longer than listWidth() must word-wrap into multiple
+// lines rather than overflowing off the right edge of the terminal, the
+// profile pill still lands on line 1, and every rendered line (including
+// the placeholder/hint lines composerBar always emits) stays within
+// listWidth() runes.
+func TestComposer_LongTaskWrapsWithinListWidth(t *testing.T) {
+	m := newFixtureModel()
+	m = send(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	long := strings.Repeat("wrap this composer text please ", 6)
+	for _, r := range long {
+		m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	bar := m.composerBar()
+	lines := strings.Split(bar, "\n")
+	width := m.listWidth()
+	if len(lines) < 3 {
+		t.Fatalf("expected the long task to wrap into multiple lines, got %d: %q", len(lines), bar)
+	}
+	for i, l := range lines {
+		if n := utf8.RuneCountInString(stripANSI(l)); n > width {
+			t.Fatalf("line %d exceeds listWidth %d: %q", i, width, stripANSI(l))
+		}
+	}
+	if !strings.Contains(stripANSI(lines[0]), "[general-agentic]") {
+		t.Fatalf("expected the profile pill on line 1, got %q", stripANSI(lines[0]))
+	}
+	// Last line before the hint is the wrapped text's true end, where the
+	// trailing "_" cursor belongs.
+	textLines := lines[:len(lines)-1]
+	last := stripANSI(textLines[len(textLines)-1])
+	if !strings.HasSuffix(last, "_") {
+		t.Fatalf("expected the cursor at the true end of the wrapped text, got %q", last)
+	}
+}
+
+// TestComposer_OverlongWordHardBreaksRuneSafe covers wrapComposerText's
+// hard-break path: a single "word" (no spaces) longer than any line's
+// budget must still wrap instead of overflowing, splitting rune-safe (never
+// producing invalid UTF-8) the same way truncate does.
+func TestComposer_OverlongWordHardBreaksRuneSafe(t *testing.T) {
+	m := newFixtureModel()
+	m = send(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	for _, r := range strings.Repeat("é", 150) {
+		m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	bar := m.composerBar()
+	if !utf8.ValidString(bar) {
+		t.Fatalf("composerBar() produced invalid UTF-8: %q", bar)
+	}
+	width := m.listWidth()
+	for i, l := range strings.Split(bar, "\n") {
+		if n := utf8.RuneCountInString(stripANSI(l)); n > width {
+			t.Fatalf("line %d exceeds listWidth %d: %q", i, width, stripANSI(l))
+		}
 	}
 }
 

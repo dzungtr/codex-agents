@@ -70,30 +70,34 @@ func TestMetaColumn_Neither(t *testing.T) {
 }
 
 // TestDetailParts_AllFieldsKnown pins detailParts' output for a fully known
-// thread to today's format: same labels, same canonical order. Ported from
-// issue #19's TestRenderDetail_AllFieldsKnown now that the parts-building
-// logic lives in detailParts rather than renderDetail (issue #20). Model
-// and Profile are set on th to prove detailParts ignores them now that
-// design drift gap 3 moved those two into badgeClusterPlain instead.
+// thread to today's format: same label, same (now single-element) result.
+// Ported from issue #19's TestRenderDetail_AllFieldsKnown now that the
+// parts-building logic lives in detailParts rather than renderDetail (issue
+// #20). Model and Profile are set on th to prove detailParts ignores them
+// now that design drift gap 3 moved those two into badgeClusterPlain
+// instead. CWD is set too, to prove detailParts ignores that as well: the
+// composer-fidelity fix dropped cwd from detailParts entirely (see its doc
+// comment) — it crowded out the selected row's badge cluster and duplicated
+// the composer bar's "Launches detached in <dir>" hint.
 func TestDetailParts_AllFieldsKnown(t *testing.T) {
 	th := codexstate.Thread{Model: "m", Profile: "p", TokenCount: 8200, CWD: "/x"}
 	got := detailParts(th)
-	want := []string{"tokens: 8200", "cwd: /x"}
+	want := []string{"tokens: 8200"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("detailParts(%+v) = %v, want %v", th, got, want)
 	}
 }
 
-// TestDetailParts_PartialFieldsOmitsUnknown covers a thread with only cwd
-// known (tokens -1, the codexstate "unknown" sentinel): the result should
-// contain just that one part, with no "tokens:" label and no "-"
-// placeholder. Ported from issue #19's TestRenderDetail_PartialFieldsOmitsUnknown.
+// TestDetailParts_PartialFieldsOmitsUnknown covers a thread with CWD known
+// but tokens unknown (-1, the codexstate "unknown" sentinel): since cwd is
+// no longer a detailParts field at all, the result should be empty, not a
+// "-" placeholder. Ported from issue #19's
+// TestRenderDetail_PartialFieldsOmitsUnknown.
 func TestDetailParts_PartialFieldsOmitsUnknown(t *testing.T) {
 	th := codexstate.Thread{Model: "m", Profile: "", TokenCount: -1, CWD: "/x"}
 	got := detailParts(th)
-	want := []string{"cwd: /x"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("detailParts(%+v) = %v, want %v", th, got, want)
+	if len(got) != 0 {
+		t.Fatalf("detailParts(%+v) = %v, want empty", th, got)
 	}
 }
 
@@ -189,12 +193,17 @@ func TestRenderMetaLine_NotSelected_ShowsMetaAndBadgesNotDetail(t *testing.T) {
 // decision 4 (detailParts appends after metaColumn when selected) plus
 // design drift gap 3 (the badge cluster also appears, and a selected row's
 // line 2 is padded to the full width for the background wash — see
-// renderRow's line 1 doing the same, and selectedStyle's doc comment).
+// renderRow's line 1 doing the same, and selectedStyle's doc comment). CWD
+// is set on th too, to prove it stays out of the rendered line now that the
+// composer-fidelity fix dropped cwd from detailParts entirely.
 func TestRenderMetaLine_Selected_AppendsDetailPartsAndBadges(t *testing.T) {
-	r := Row{Thread: codexstate.Thread{CWD: "/x", Model: "m", Profile: "", TokenCount: -1, MessageCount: 2}}
+	r := Row{Thread: codexstate.Thread{CWD: "/x", Model: "m", Profile: "", TokenCount: 100, MessageCount: 2}}
 	got := stripANSI(renderMetaLine(r, true, 80))
-	if !strings.Contains(got, "cwd: /x") {
-		t.Fatalf("expected detailParts' cwd on the selected row, got %q", got)
+	if !strings.Contains(got, "tokens: 100") {
+		t.Fatalf("expected detailParts' tokens on the selected row, got %q", got)
+	}
+	if strings.Contains(got, "cwd:") {
+		t.Fatalf("expected cwd to stay out of the selected row's detail line, got %q", got)
 	}
 	if !strings.Contains(got, "[m]") {
 		t.Fatalf("expected model badge on the selected row, got %q", got)
