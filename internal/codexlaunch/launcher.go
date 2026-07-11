@@ -233,12 +233,21 @@ func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 	}, nil
 }
 
-// Resume starts a managed tmux session running `codex resume <threadID>`
-// for a thread that codex already knows about but has no live session
-// (i.e. StatusClosed, including a thread whose history predates the
-// cockpit entirely). cwd is the thread's own working directory, as
-// recorded by codex (codexstate.Thread.CWD) — resuming must happen in the
-// same directory the original conversation ran in.
+// Resume starts a managed tmux session running `codex -p <profile> resume
+// <threadID>` (or plain `codex resume <threadID>` if no profile is known)
+// for a thread that codex already knows about but has no live session (i.e.
+// StatusClosed, including a thread whose history predates the cockpit
+// entirely). cwd is the thread's own working directory, as recorded by
+// codex (codexstate.Thread.CWD) — resuming must happen in the same
+// directory the original conversation ran in.
+//
+// profile should be the thread's own recorded profile (codexstate.Thread.
+// Profile, sourced from the thread's rollout JSONL) so the resumed session
+// picks up the same profile — and therefore the same model — the thread
+// originally ran under, rather than silently falling back to the base
+// config.toml's model. If profile is empty, Resume falls back to any
+// profile already recorded in this cockpit's own state.json for threadID
+// (e.g. a prior cockpit-managed launch of the same thread).
 //
 // If threadID already has a state.json entry (e.g. a prior cockpit-managed
 // launch that has since closed), its profile is preserved; otherwise
@@ -250,9 +259,20 @@ func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 // derivation degrades to plain tmux-liveness (StatusWorking while alive)
 // unless an earlier Launch of the same thread ID already left a recorded
 // event behind.
-func (l *Launcher) Resume(threadID, cwd string) (LaunchResult, error) {
+func (l *Launcher) Resume(threadID, cwd, profile string) (LaunchResult, error) {
+	st, err := agentstate.Load(l.StatePath)
+	if err != nil {
+		return LaunchResult{}, fmt.Errorf("codexlaunch: load state: %w", err)
+	}
+	entry := st.Threads[threadID]
+
+	resumeProfile := profile
+	if resumeProfile == "" {
+		resumeProfile = entry.Profile
+	}
+
 	session := tmuxstatus.SessionName(threadID)
-	tmuxArgs := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.NewSessionArgs(session, cwd, ResumeArgs(threadID)))
+	tmuxArgs := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.NewSessionArgs(session, cwd, ResumeArgs(threadID, resumeProfile)))
 	if err := l.Tmux.Run(tmuxArgs); err != nil {
 		return LaunchResult{}, fmt.Errorf("codexlaunch: start resume tmux session: %w", err)
 	}
@@ -261,14 +281,12 @@ func (l *Launcher) Resume(threadID, cwd string) (LaunchResult, error) {
 		return LaunchResult{}, err
 	}
 
-	st, err := agentstate.Load(l.StatePath)
-	if err != nil {
-		return LaunchResult{}, fmt.Errorf("codexlaunch: load state: %w", err)
-	}
-	entry := st.Threads[threadID]
 	entry.TmuxSession = session
 	if entry.WorktreePath == "" {
 		entry.WorktreePath = cwd
+	}
+	if entry.Profile == "" {
+		entry.Profile = resumeProfile
 	}
 	if err := agentstate.Upsert(l.StatePath, threadID, entry); err != nil {
 		return LaunchResult{}, fmt.Errorf("codexlaunch: persist state: %w", err)

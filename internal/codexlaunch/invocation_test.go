@@ -74,7 +74,15 @@ func TestNewThreadArgs_EmptyNotifyOmitsFlag(t *testing.T) {
 }
 
 func TestResumeArgs(t *testing.T) {
-	got := ResumeArgs("thread-abc123")
+	got := ResumeArgs("thread-abc123", "general-agentic")
+	want := []string{"codex", "-p", "general-agentic", "resume", "thread-abc123"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ResumeArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestResumeArgs_EmptyProfileOmitsFlag(t *testing.T) {
+	got := ResumeArgs("thread-abc123", "")
 	want := []string{"codex", "resume", "thread-abc123"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ResumeArgs() = %v, want %v", got, want)

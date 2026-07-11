@@ -217,7 +217,7 @@ func TestResume_ReusesThreadIDAndUpdatesState(t *testing.T) {
 	tmux := &fakeTmuxRunner{}
 	l, statePath := newTestLauncher(t, nil, tmux, nil)
 
-	res, err := l.Resume("existing-thread-id", "/repo/.worktrees/fix-auth-hook")
+	res, err := l.Resume("existing-thread-id", "/repo/.worktrees/fix-auth-hook", "general-agentic")
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestResume_ReusesThreadIDAndUpdatesState(t *testing.T) {
 	if len(tmux.calls) != 1 {
 		t.Fatalf("expected one tmux call, got %v", tmux.calls)
 	}
-	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.NewSessionArgs(wantSession, "/repo/.worktrees/fix-auth-hook", ResumeArgs("existing-thread-id")))
+	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.NewSessionArgs(wantSession, "/repo/.worktrees/fix-auth-hook", ResumeArgs("existing-thread-id", "general-agentic")))
 	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {
 		t.Errorf("tmux call = %v, want %v", tmux.calls[0], want)
 	}
@@ -334,7 +334,7 @@ func TestResume_ReturnsErrorAndDoesNotUpdateState_WhenPaneDiesImmediately(t *tes
 		return tmuxstatus.PaneState{Dead: true, ExitCode: 1, Output: "codex: no such thread"}, nil
 	}
 
-	if _, err := l.Resume("t1", "/repo/.worktrees/t1"); err == nil {
+	if _, err := l.Resume("t1", "/repo/.worktrees/t1", "review"); err == nil {
 		t.Fatalf("expected Resume to fail when the pane died immediately")
 	}
 
@@ -354,11 +354,37 @@ func TestResume_PreservesKnownProfileFromPriorState(t *testing.T) {
 		t.Fatalf("seed state: %v", err)
 	}
 
-	res, err := l.Resume("t1", "/repo/.worktrees/t1")
+	res, err := l.Resume("t1", "/repo/.worktrees/t1", "")
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
 	if res.Profile != "review" {
 		t.Errorf("Profile = %q, want preserved 'review'", res.Profile)
+	}
+
+	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.NewSessionArgs(tmuxstatus.SessionName("t1"), "/repo/.worktrees/t1", ResumeArgs("t1", "review")))
+	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {
+		t.Errorf("tmux call = %v, want %v (fell back to prior state's profile)", tmux.calls[0], want)
+	}
+}
+
+func TestResume_CallerProfileOverridesPriorState(t *testing.T) {
+	tmux := &fakeTmuxRunner{}
+	l, statePath := newTestLauncher(t, nil, tmux, nil)
+	if err := agentstate.Upsert(statePath, "t1", agentstate.Entry{Profile: "review", WorktreePath: "/repo/.worktrees/t1"}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	res, err := l.Resume("t1", "/repo/.worktrees/t1", "general-agentic")
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if res.Profile != "review" {
+		t.Errorf("Profile = %q, want state's existing 'review' preserved", res.Profile)
+	}
+
+	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.NewSessionArgs(tmuxstatus.SessionName("t1"), "/repo/.worktrees/t1", ResumeArgs("t1", "general-agentic")))
+	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {
+		t.Errorf("tmux call = %v, want %v (caller-supplied profile used for -p)", tmux.calls[0], want)
 	}
 }

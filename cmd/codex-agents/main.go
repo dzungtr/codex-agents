@@ -259,7 +259,7 @@ func attachAction(launcher *codexlaunch.Launcher) func(row ui.Row) tea.Cmd {
 		// same as before this existed).
 		live, _ := tmuxstatus.ListLiveSessions()
 		if needsResume(row, session, tmuxstatus.NewLiveSet(live)) {
-			if _, err := launcher.Resume(row.Thread.ID, row.Thread.CWD); err != nil {
+			if _, err := launcher.Resume(row.Thread.ID, row.Thread.CWD, row.Thread.Profile); err != nil {
 				return func() tea.Msg { return ui.ThreadLaunchErrorMsg{Err: err} }
 			}
 		}

@@ -62,7 +62,13 @@ func notifyConfigValue(argv []string) string {
 }
 
 // ResumeArgs builds the codex invocation for resuming an existing thread by
-// ID: `codex resume <id>`.
-func ResumeArgs(threadID string) []string {
-	return []string{"codex", "resume", threadID}
+// ID: `codex -p <profile> resume <id>`. An empty profile ("unknown", e.g. a
+// thread whose rollout predates profile recording) omits `-p` entirely
+// rather than forcing a default that might not match how the thread was
+// originally launched.
+func ResumeArgs(threadID, profile string) []string {
+	if profile == "" {
+		return []string{"codex", "resume", threadID}
+	}
+	return []string{"codex", "-p", profile, "resume", threadID}
 }
