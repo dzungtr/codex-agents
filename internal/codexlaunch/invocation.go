@@ -7,17 +7,9 @@ package codexlaunch
 
 import "encoding/json"
 
-// DefaultProfile is the composer's default profile pick: a detached launch
-// implies an unattended posture (PRD #1, Launch semantics).
-const DefaultProfile = "general-agentic"
-
-// KnownProfiles are the profiles the composer's `@` menu offers, per PRD
-// #1: each corresponds to $CODEX_HOME/<name>.config.toml.
-var KnownProfiles = []string{"general-agentic", "design-session", "review"}
-
 // NewThreadSpec describes a new codex thread to launch.
 type NewThreadSpec struct {
-	Profile string // "" defaults to DefaultProfile
+	Profile string // "" means no -p flag; codex uses its own default
 	Model   string // "" leaves the profile's own model untouched
 	Task    string
 	// Notify, when non-empty, is chained as `-c notify=[...]`: the
@@ -34,11 +26,16 @@ type NewThreadSpec struct {
 // and Notify are each layered on top of the profile only when explicitly
 // set.
 func NewThreadArgs(spec NewThreadSpec) []string {
-	profile := spec.Profile
-	if profile == "" {
-		profile = DefaultProfile
+	// An empty Profile means "don't pass -p" — let codex pick its own
+	// default. The launcher is the single place that decides whether a
+	// caller-supplied empty profile is honoured, and it does (see
+	// Launcher.Launch: req.Profile passes through unchanged). UI code
+	// that wants a specific profile must look it up in the discovered
+	// list rather than synthesizing a name.
+	args := []string{"codex"}
+	if spec.Profile != "" {
+		args = append(args, "-p", spec.Profile)
 	}
-	args := []string{"codex", "-p", profile}
 	if spec.Model != "" {
 		args = append(args, "-c", "model="+spec.Model)
 	}

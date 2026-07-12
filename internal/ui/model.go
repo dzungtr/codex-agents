@@ -48,6 +48,14 @@ type Model struct {
 	composerTask       string
 	composerProfileIdx int
 
+	// composerProfiles is the ordered list of profile names the
+	// composer's `@` key cycles through, supplied at startup via
+	// WithProfiles (typically from codexlaunch.DiscoverProfiles, which
+	// scans $CODEX_HOME/*.config.toml). When empty, the composer
+	// launches with no `-p` profile flag, letting codex use its own
+	// default; this is the no-profiles-on-disk state.
+	composerProfiles []string
+
 	// replyFocused, replyText and replyThreadID hold the quick-reply
 	// input's state while the user is typing a one-line reply to an alive
 	// (waiting or working) thread (`r` to focus; PRD #1's List behavior ->
@@ -87,7 +95,14 @@ type Model struct {
 func New(rows []Row) Model {
 	sorted := append([]Row(nil), rows...)
 	sortRows(sorted)
-	m := Model{rows: sorted, now: time.Now}
+	// composerProfiles is left nil: a zero-value Model represents
+	// "no profiles on disk", and the composer launches with no -p
+	// flag. The real list arrives via WithProfiles (or, in production,
+	// codexlaunch.DiscoverProfiles piped in by main.go).
+	m := Model{
+		rows: sorted,
+		now:  time.Now,
+	}
 	m.applyFilter()
 	return m
 }
@@ -131,6 +146,22 @@ func (m Model) WithClock(now func() time.Time) Model {
 // "in <dir>" clause rather than showing a blank directory.
 func (m Model) WithLaunchDir(dir string) Model {
 	m.launchDir = dir
+	return m
+}
+
+// WithProfiles sets the ordered list of profile names the composer's
+// `@` key cycles through. Pass the result of
+// codexlaunch.DiscoverProfiles(codexHome) so users see profiles that
+// actually exist on disk under $CODEX_HOME/*.config.toml. The list is
+// copied so the caller can mutate their slice afterwards without
+// affecting the model.
+//
+// An empty or nil slice is allowed and represents the
+// "no profiles on disk" state: the composer pill renders as `[]`
+// and the launch goes ahead with no `-p` flag, letting codex use
+// its own default. There is no hard-coded fallback name.
+func (m Model) WithProfiles(profiles []string) Model {
+	m.composerProfiles = append([]string(nil), profiles...)
 	return m
 }
 

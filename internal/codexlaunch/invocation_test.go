@@ -22,11 +22,23 @@ func TestNewThreadArgs_ExplicitModelLayersOnTop(t *testing.T) {
 	}
 }
 
-func TestNewThreadArgs_EmptyProfileDefaultsToGeneralAgentic(t *testing.T) {
+// TestNewThreadArgs_EmptyProfileOmitsPFlag is the contract for the
+// composer's "no profile files on disk" launch path: an empty Profile
+// means "let codex use its own default", which is signalled to codex
+// by omitting the -p flag entirely (rather than falling back to a
+// hard-coded name like general-agentic — that decision now belongs to
+// codex, not to the cockpit).
+func TestNewThreadArgs_EmptyProfileOmitsPFlag(t *testing.T) {
 	got := NewThreadArgs(NewThreadSpec{Task: "fix the auth hook"})
-	want := []string{"codex", "-p", DefaultProfile, "fix the auth hook"}
+	want := []string{"codex", "fix the auth hook"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("NewThreadArgs() = %v, want %v", got, want)
+	}
+	// Defence in depth: make sure no -p sneaks in anywhere.
+	for i, a := range got {
+		if a == "-p" && i+1 < len(got) {
+			t.Errorf("expected no -p flag for empty Profile, got -p %q in %v", got[i+1], got)
+		}
 	}
 }
 
@@ -86,17 +98,5 @@ func TestResumeArgs_EmptyProfileOmitsFlag(t *testing.T) {
 	want := []string{"codex", "resume", "thread-abc123"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ResumeArgs() = %v, want %v", got, want)
-	}
-}
-
-func TestKnownProfiles_IncludesDefault(t *testing.T) {
-	found := false
-	for _, p := range KnownProfiles {
-		if p == DefaultProfile {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected KnownProfiles %v to include DefaultProfile %q", KnownProfiles, DefaultProfile)
 	}
 }

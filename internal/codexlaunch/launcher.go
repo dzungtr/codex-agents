@@ -189,10 +189,14 @@ type LaunchResult struct {
 // and records the result in state.json. If the tmux start fails, no
 // state.json entry is written.
 func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
+	// req.Profile passes through unchanged: an empty string is a
+	// legitimate signal from the composer ("no profile files on disk,
+	// launch with codex's own default") rather than a missing value to
+	// be replaced with a hard-coded name. NewThreadArgs omits the -p
+	// flag for an empty Profile, and ExistingNotifyCommand treats an
+	// empty profile as "no forwarding target" — the no-profile launch
+	// path is safe end-to-end.
 	profile := req.Profile
-	if profile == "" {
-		profile = DefaultProfile
-	}
 
 	ws, err := ResolveWorkspace(l.Git, req.StartDir, req.Task)
 	if err != nil {

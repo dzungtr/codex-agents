@@ -118,8 +118,11 @@ func TestLaunch_DefaultsProfileWhenUnset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
-	if res.Profile != DefaultProfile {
-		t.Errorf("Profile = %q, want default %q", res.Profile, DefaultProfile)
+	// Empty Profile is now a legitimate signal: the launcher records
+	// the empty string and NewThreadArgs omits the -p flag, so the
+	// launch goes ahead with codex's own default profile.
+	if res.Profile != "" {
+		t.Errorf("Profile = %q, want %q (empty: no -p flag at launch time)", res.Profile, "")
 	}
 	if !res.InPlace {
 		t.Errorf("expected InPlace=true for a non-git start dir")
