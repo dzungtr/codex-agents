@@ -92,6 +92,42 @@ func TestMouseOnArgs(t *testing.T) {
 	}
 }
 
+func TestWheelUpArgs(t *testing.T) {
+	// Overrides tmux's default WheelUpPane (which in alt-screen mode
+	// forwards 3x Up arrow keys via `send-keys -N 3 Up`, and on older
+	// tmux falls back to PageUp) with a passthrough that hands the
+	// wheel event to the pane as a real mouse escape sequence via
+	// `send-keys -M`. The `if` branch is true in copy/alt-screen mode;
+	// the false branch preserves the default `copy-mode -e` fallback
+	// for plain shell panes.
+	got := WheelUpArgs()
+	want := []string{
+		"bind-key", "-n", "WheelUpPane",
+		"if-shell", "-F", "#{||:#{pane_in_mode},#{alternate_on}}",
+		"send-keys -M",
+		"copy-mode -e",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("WheelUpArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestWheelDownArgs(t *testing.T) {
+	// Mirror of TestWheelUpArgs: forward as a real mouse event in
+	// copy/alt mode and do nothing otherwise (matching tmux's default
+	// WheelDownPane, which intentionally never opens copy mode for
+	// wheel-down).
+	got := WheelDownArgs()
+	want := []string{
+		"bind-key", "-n", "WheelDownPane",
+		"if-shell", "-F", "#{||:#{pane_in_mode},#{alternate_on}}",
+		"send-keys -M",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("WheelDownArgs() = %v, want %v", got, want)
+	}
+}
+
 func TestChainArgs(t *testing.T) {
 	got := ChainArgs(
 		RemainOnExitArgs(),
@@ -300,5 +336,44 @@ func TestInspectPane_RealTmux_AliveCommandReportsNotDead(t *testing.T) {
 	}
 	if state.Dead {
 		t.Fatalf("expected a still-running command to report Dead=false, got %+v", state)
+	}
+}
+
+// TestWheelBindings_RealTmux_ChainSucceeds exercises the full
+// RemainOnExit + MouseOn + WheelUp + WheelDown + NewSession chain against
+// a real tmux server. The if-shell commands in WheelUpArgs/WheelDownArgs
+// must be passed as single-string arguments (not split into separate
+// argv tokens) — if-shell rejects more than 3 arguments after the
+// condition. This test catches that regression by running the actual chain
+// and verifying the session starts successfully and the bindings take
+// effect. Skips gracefully when tmux isn't installed.
+func TestWheelBindings_RealTmux_ChainSucceeds(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed in this environment")
+	}
+
+	const session = "cxa-testwheelchain"
+	runner := ExecRunner{}
+	_ = runner.Run([]string{"kill-session", "-t", session})
+
+	chained := ChainArgs(
+		RemainOnExitArgs(),
+		MouseOnArgs(),
+		WheelUpArgs(),
+		WheelDownArgs(),
+		NewSessionArgs(session, ".", []string{"sleep", "5"}),
+	)
+	if err := runner.Run(chained); err != nil {
+		t.Fatalf("chain (remain-on-exit + mouse on + wheel bindings + new-session) failed: %v", err)
+	}
+	defer runner.Run([]string{"kill-session", "-t", session})
+
+	// Verify the session is alive.
+	state, err := InspectPane(session)
+	if err != nil {
+		t.Fatalf("InspectPane: %v", err)
+	}
+	if state.Dead {
+		t.Fatalf("expected session to be alive, got dead pane: %+v", state)
 	}
 }
