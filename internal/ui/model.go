@@ -201,23 +201,73 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyFilter()
 		m.selectThreadID(row.Thread.ID)
 		m.statusLine = "launched " + displayTitle(row.Thread)
-		if m.actions.CheckLiveness != nil {
-			return m, m.actions.CheckLiveness(row.Thread.ID)
+		// ADR 0002: open the live event stream for the new thread so
+		// message/token deltas flow back into the row. We fire this
+		// regardless of CheckLiveness: the launched row's status is
+		// already Working (compose-and-launch writes it that way), and
+		// a liveness check that comes back Closed will trigger the
+		// matching LiveUnsubscribe on its own ThreadLivenessMsg.
+		var subs tea.Cmd
+		if m.actions.LiveSubscribe != nil {
+			subs = m.actions.LiveSubscribe(row.Thread.ID)
 		}
-		return m, nil
+		if m.actions.CheckLiveness != nil {
+			return m, tea.Batch(m.actions.CheckLiveness(row.Thread.ID), subs)
+		}
+		return m, subs
 	case ThreadLivenessMsg:
 		// Patches just this one row's Status in place rather than doing a
 		// full Refresh (see Actions.CheckLiveness's doc comment for why a
 		// full reload is unsafe this soon after launch).
+		var statusFlipped bool
+		var nowClosed bool
 		for i := range m.rows {
 			if m.rows[i].Thread.ID == msg.ThreadID {
 				if m.rows[i].Status != msg.Status {
 					m.rows[i].Status = msg.Status
 					sortRows(m.rows)
 					m.applyFilter()
+					statusFlipped = true
+					nowClosed = msg.Status == tmuxstatus.StatusClosed
 				}
 				break
 			}
+		}
+		// ADR 0002 subscribe lifecycle: keep the App Server's
+		// subscription list aligned with the visible status. We
+		// only act on a status *change* — a no-op liveness re-check
+		// mustn't churn the server's thread list.
+		if !statusFlipped {
+			return m, nil
+		}
+		if nowClosed {
+			if m.actions.LiveUnsubscribe != nil {
+				return m, m.actions.LiveUnsubscribe(msg.ThreadID)
+			}
+			return m, nil
+		}
+		if m.actions.LiveSubscribe != nil {
+			return m, m.actions.LiveSubscribe(msg.ThreadID)
+		}
+		return m, nil
+	case ThreadLiveUpdateMsg:
+		// Live patch from the codex App Server (ADR 0002). Same
+		// in-place pattern as ThreadLivenessMsg — only the touched
+		// row changes, so we never trigger a full Refresh or any
+		// status re-derivation. The -1 sentinels mean "no change for
+		// this field" so a single update carrying only a token-usage
+		// delta doesn't clobber a known message count.
+		for i := range m.rows {
+			if m.rows[i].Thread.ID != msg.ThreadID {
+				continue
+			}
+			if msg.MessageCount >= 0 {
+				m.rows[i].Thread.MessageCount = msg.MessageCount
+			}
+			if msg.TokenCount >= 0 {
+				m.rows[i].Thread.TokenCount = msg.TokenCount
+			}
+			return m, nil
 		}
 		return m, nil
 	case ThreadLaunchErrorMsg:
@@ -258,6 +308,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rows = removeThread(m.rows, msg.ThreadID)
 		m.applyFilter()
 		m.statusLine = msg.Note
+		// ADR 0002: drop the App Server subscription for the
+		// archived thread so the server's per-thread stream
+		// doesn't keep firing into a channel whose consumer
+		// (this Model) just stopped rendering the row.
+		if m.actions.LiveUnsubscribe != nil {
+			return m, m.actions.LiveUnsubscribe(msg.ThreadID)
+		}
 		return m, nil
 	}
 	return m, nil
