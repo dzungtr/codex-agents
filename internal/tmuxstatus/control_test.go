@@ -84,6 +84,13 @@ func TestRemainOnExitArgs(t *testing.T) {
 		t.Errorf("RemainOnExitArgs() = %v, want %v", got, want)
 	}
 }
+func TestMouseOnArgs(t *testing.T) {
+	got := MouseOnArgs()
+	want := []string{"set-option", "-g", "mouse", "on"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("MouseOnArgs() = %v, want %v", got, want)
+	}
+}
 
 func TestChainArgs(t *testing.T) {
 	got := ChainArgs(
