@@ -452,3 +452,67 @@ func TestUpdate_RowsRefreshedMsg_ReplacesRows(t *testing.T) {
 		t.Fatalf("expected old rows to be gone after refresh, got:\n%s", view)
 	}
 }
+
+// TestModel_WithProfilesNilYieldsEmptyProfile guards the no-profiles-on-disk
+// state: if the caller (or a test, or a future main.go) forgets to call
+// WithProfiles, or hands us an empty slice, the composer's selected profile
+// must be "" — the launch then goes ahead with no -p flag, letting codex
+// fall back to its own default. It must never panic on a nil-index or
+// silently substitute a hard-coded profile name.
+func TestModel_WithProfilesNilYieldsEmptyProfile(t *testing.T) {
+	for _, in := range [][]string{nil, {}} {
+		m := New(fixtureRows()).WithProfiles(in)
+		if got := m.composerProfile(); got != "" {
+			t.Errorf("WithProfiles(%v): composerProfile() = %q, want %q", in, got, "")
+		}
+	}
+}
+
+// TestModel_AtOnEmptyProfilesIsNoOp confirms that pressing @ while the
+// composer is focused and no profiles are on disk is a no-op: no panic
+// from a divide-by-zero on the empty slice, the pill stays empty
+// (composerProfile() keeps returning ""), and the launch that follows
+// gets an empty profile string. Using composerProfile() directly (rather
+// than scanning the rendered view) avoids picking up the row meta badge
+// ([general-agentic]) that fixtureRows still carries on its
+// add-dark-mode row — that badge is the row's *thread profile*, not the
+// composer's selected profile.
+func TestModel_AtOnEmptyProfilesIsNoOp(t *testing.T) {
+	m := newFixtureModel().WithProfiles(nil)
+	if got := m.composerProfile(); got != "" {
+		t.Fatalf("before @: composerProfile() = %q, want %q", got, "")
+	}
+	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	if got := m.composerProfile(); got != "" {
+		t.Fatalf("after focus: composerProfile() = %q, want %q", got, "")
+	}
+	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("@")})
+	if got := m.composerProfile(); got != "" {
+		t.Fatalf("after @: composerProfile() = %q, want %q", got, "")
+	}
+	// Sanity: the view should still render the empty pill, not silently
+	// fall back to a hard-coded name.
+	if !strings.Contains(m.View(), "[]") {
+		t.Fatalf("expected empty pill [] in view after @, got:\n%s", m.View())
+	}
+}
+
+// TestModel_WithProfilesCustomListCoversAtCycle confirms the discovered
+// list flows through to the composer's @ cycle: a custom two-name list
+// rotates through both and wraps, instead of using the old hard-coded
+// three-name cycle. This is the behaviour change the PR is shipping.
+func TestModel_WithProfilesCustomListCoversAtCycle(t *testing.T) {
+	m := New(fixtureRows()).WithProfiles([]string{"alpha", "beta"})
+	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	if !strings.Contains(m.View(), "[alpha]") {
+		t.Fatalf("expected default profile 'alpha' in view, got:\n%s", m.View())
+	}
+	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("@")})
+	if !strings.Contains(m.View(), "[beta]") {
+		t.Fatalf("expected profile to cycle to 'beta', got:\n%s", m.View())
+	}
+	m = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("@")})
+	if !strings.Contains(m.View(), "[alpha]") {
+		t.Fatalf("expected profile to cycle back to 'alpha', got:\n%s", m.View())
+	}
+}

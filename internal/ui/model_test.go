@@ -52,7 +52,9 @@ func fixtureRows() []Row {
 }
 
 func newFixtureModel() Model {
-	return New(fixtureRows()).WithClock(fixedNow)
+	return New(fixtureRows()).
+		WithClock(fixedNow).
+		WithProfiles([]string{"general-agentic", "design-session", "review"})
 }
 
 func TestModel_InitialView_OrdersRowsMostRecentFirstAndSelectsFirst(t *testing.T) {

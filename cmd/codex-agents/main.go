@@ -95,6 +95,16 @@ func run() error {
 		CodexHome: codexHome,
 	}
 
+	profiles, err := codexlaunch.DiscoverProfiles(codexHome)
+	if err != nil {
+		// A profile-discovery failure must never abort startup: the
+		// composer falls back to the "no profiles on disk" state and
+		// launches with no -p flag, so a permissions error on
+		// $CODEX_HOME can't take the whole cockpit down.
+		fmt.Fprintf(os.Stderr, "codex-agents: discover profiles: %v\n", err)
+		profiles = nil
+	}
+
 	rows, err := loadRows(codexHome, statePath)
 	if err != nil {
 		return err
@@ -110,7 +120,13 @@ func run() error {
 		CheckLiveness: checkLivenessAction(statePath),
 	}
 
-	_, err = tea.NewProgram(ui.New(rows).WithActions(actions).WithLaunchDir(startDir), tea.WithAltScreen()).Run()
+	_, err = tea.NewProgram(
+		ui.New(rows).
+			WithActions(actions).
+			WithLaunchDir(startDir).
+			WithProfiles(profiles),
+		tea.WithAltScreen(),
+	).Run()
 	return err
 }
 

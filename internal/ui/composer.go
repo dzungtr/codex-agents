@@ -107,14 +107,19 @@ type ThreadLivenessMsg struct {
 	Status   tmuxstatus.Status
 }
 
-// composerProfiles is the fixed profile cycle offered by the composer's
-// `@` key, per PRD #1's Launch semantics table (each corresponds to
-// $CODEX_HOME/<name>.config.toml). general-agentic is first/default: a
-// detached launch implies an unattended posture.
-var composerProfiles = []string{"general-agentic", "design-session", "review"}
-
+// composerProfile returns the profile name the composer would launch
+// with on Enter right now. It indexes m.composerProfiles, supplied at
+// startup via WithProfiles (typically the result of
+// codexlaunch.DiscoverProfiles, which scans $CODEX_HOME/*.config.toml).
+//
+// When the discovered list is empty (no $CODEX_HOME/*.config.toml
+// files), this returns ""; the composer pill renders as `[]` and
+// the launch goes ahead with no `-p` flag.
 func (m Model) composerProfile() string {
-	return composerProfiles[m.composerProfileIdx]
+	if len(m.composerProfiles) == 0 {
+		return ""
+	}
+	return m.composerProfiles[m.composerProfileIdx%len(m.composerProfiles)]
 }
 
 // handleComposerKey processes a key while the composer is focused. It
@@ -142,7 +147,12 @@ func (m Model) handleComposerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.composerTask += " "
 	case tea.KeyRunes:
 		if string(msg.Runes) == "@" {
-			m.composerProfileIdx = (m.composerProfileIdx + 1) % len(composerProfiles)
+			// No-op on an empty list: pressing @ when there are no
+			// profiles on disk shouldn't panic with a divide-by-zero,
+			// and there's nothing to cycle through anyway.
+			if len(m.composerProfiles) > 0 {
+				m.composerProfileIdx = (m.composerProfileIdx + 1) % len(m.composerProfiles)
+			}
 		} else {
 			m.composerTask += string(msg.Runes)
 		}
