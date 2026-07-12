@@ -20,6 +20,7 @@ import (
 
 	"github.com/dzungtr/codex-agents/internal/agentstate"
 	"github.com/dzungtr/codex-agents/internal/codexlaunch"
+	"github.com/dzungtr/codex-agents/internal/codexserver"
 	"github.com/dzungtr/codex-agents/internal/codexstate"
 	"github.com/dzungtr/codex-agents/internal/notifyhook"
 	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
@@ -110,23 +111,92 @@ func run() error {
 		return err
 	}
 
-	actions := ui.Actions{
-		Launch:        launchAction(launcher, startDir),
-		Attach:        attachAction(launcher),
-		Refresh:       refreshAction(codexHome, statePath),
-		QuickReply:    quickReplyAction(launcher),
-		Interrupt:     interruptAction(launcher.Tmux, statePath),
-		Archive:       archiveAction(launcher, statePath),
-		CheckLiveness: checkLivenessAction(statePath),
+	// Wire the codex App Server manager (ADR 0002). A failed Start
+	// is logged and the cockpit continues in degraded mode — every
+	// Subscribe call is a no-op, every Events() read returns
+	// nothing, and the UI behaves exactly like the pre-0002
+	// cockpit (codexstate MessageCount/TokenCount on first load,
+	// refreshed on user-driven Refresh). The same applies when
+	// the codex binary is missing or the App Server refuses the
+	// initialize handshake: the cockpit must always render its
+	// row list, never crash on a peripheral.
+	mgr := codexserver.NewManager(codexHome)
+	if err := mgr.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "codex-agents: codex App Server unavailable (%v); live updates disabled\n", err)
+	} else {
+		// Subscribe to every alive thread on startup so the
+		// existing rows light up immediately. We pass over
+		// closed rows — ADR 0002 decision 4 says only alive
+		// threads get subscriptions, and the App Server's
+		// thread/resume would either fail or come back
+		// empty for a dead session anyway.
+		for _, r := range rows {
+			if r.Status == tmuxstatus.StatusClosed {
+				continue
+			}
+			_ = mgr.Subscribe(r.Thread.ID)
+		}
 	}
 
-	_, err = tea.NewProgram(
+	// Action hooks for the ADR 0002 subscribe lifecycle. Each one
+	// returns a tea.Cmd that runs in a goroutine — the actual
+	// JSON-RPC round-trip is network latency and must never stall
+	// bubbletea. The hooks ignore the manager's nil error from a
+	// degraded Start (Subscribe/Unsubscribe are documented as
+	// no-ops in that state) so the UI doesn't surface a fake
+	// error message.
+	silentLiveCmd := func(fn func(string) error) func(string) tea.Cmd {
+		return func(threadID string) tea.Cmd {
+			return func() tea.Msg {
+				_ = fn(threadID)
+				return nil
+			}
+		}
+	}
+
+	actions := ui.Actions{
+		Launch:          launchAction(launcher, startDir),
+		Attach:          attachAction(launcher),
+		Refresh:         refreshAction(codexHome, statePath),
+		QuickReply:      quickReplyAction(launcher),
+		Interrupt:       interruptAction(launcher.Tmux, statePath),
+		Archive:         archiveAction(launcher, statePath),
+		CheckLiveness:   checkLivenessAction(statePath),
+		LiveSubscribe:   silentLiveCmd(mgr.Subscribe),
+		LiveUnsubscribe: silentLiveCmd(mgr.Unsubscribe),
+	}
+
+	program := tea.NewProgram(
 		ui.New(rows).
 			WithActions(actions).
 			WithLaunchDir(startDir).
 			WithProfiles(profiles),
 		tea.WithAltScreen(),
-	).Run()
+	)
+
+	// Forward codex App Server events into the bubbletea program
+	// until it exits. The manager closes its Events() channel on
+	// Stop, so this loop drains cleanly when mgr.Stop runs below
+	// (after program.Run returns). We do NOT call mgr.Stop in a
+	// defer because the program may have been torn down by
+	// SIGINT already; the explicit teardown ordering here is the
+	// "kill the producer, then drain the consumer" rule from
+	// ADR 0002 decision 1.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for ev := range mgr.Events() {
+			program.Send(ui.ThreadLiveUpdateMsg{
+				ThreadID:     ev.ThreadID,
+				MessageCount: ev.MessageCount,
+				TokenCount:   ev.TokenCount,
+			})
+		}
+	}()
+
+	_, err = program.Run()
+	mgr.Stop()
+	<-done
 	return err
 }
 

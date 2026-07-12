@@ -62,6 +62,26 @@ type Actions struct {
 	// instead of correcting its status. Returns a Cmd that yields
 	// ThreadLivenessMsg.
 	CheckLiveness func(threadID string) tea.Cmd
+
+	// LiveSubscribe opens a live event stream for threadID via the
+	// codex App Server (ADR 0002). Called when a thread becomes
+	// alive in the cockpit's row set (launched, revived, or
+	// discovered alive at startup). The actual side effect is a
+	// thread/resume JSON-RPC call, so the function returns a Cmd
+	// that runs in a goroutine — a slow App Server should never
+	// stall bubbletea. Optional; when nil, the cockpit simply
+	// doesn't subscribe (no live updates).
+	LiveSubscribe func(threadID string) tea.Cmd
+
+	// LiveUnsubscribe tears down the live event stream for
+	// threadID (ADR 0002). Called when a thread leaves the
+	// cockpit's row set (archive) or transitions to closed via a
+	// liveness patch — keeping the subscription list aligned with
+	// the visible rows. Returns a Cmd that runs in a goroutine
+	// (the matching thread/unsubscribe call is also network
+	// round-trip latency). Optional; when nil, the cockpit simply
+	// doesn't unsubscribe.
+	LiveUnsubscribe func(threadID string) tea.Cmd
 }
 
 // ThreadLaunchedMsg reports a successful composer launch. Row is inserted
@@ -105,6 +125,22 @@ type ArchiveDoneMsg struct {
 type ThreadLivenessMsg struct {
 	ThreadID string
 	Status   tmuxstatus.Status
+}
+
+// ThreadLiveUpdateMsg carries a live-update patch from the codex App
+// Server (internal/codexserver.Manager -> Events() -> bubbletea program
+// .Send). MessageCount and TokenCount are absolute totals; -1 means
+// "no change for this field" (matching the codexstate "unknown"
+// sentinel and the codexserver.Event convention), so the receiver
+// can skip the patch for that field rather than overwriting a known
+// good value. The UI patches the matching row's MessageCount /
+// TokenCount in place and re-renders — no full Refresh, no
+// status-derivation, no notify-hook involvement (ADR 0002 decision 6:
+// the App Server supplements, never replaces, the existing sources).
+type ThreadLiveUpdateMsg struct {
+	ThreadID     string
+	MessageCount int
+	TokenCount   int
 }
 
 // composerProfile returns the profile name the composer would launch

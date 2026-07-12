@@ -86,7 +86,13 @@ func TestRemainOnExitArgs(t *testing.T) {
 }
 func TestMouseOnArgs(t *testing.T) {
 	got := MouseOnArgs()
-	want := []string{"set-option", "-g", "mouse", "on"}
+	want := []string{
+		"set-option", "-g", "mouse", "on",
+		";",
+		"bind-key", "-T", "root", "WheelUpPane", "send-keys", "-N", "1", "PageUp",
+		";",
+		"bind-key", "-T", "root", "WheelDownPane", "send-keys", "-N", "1", "PageDown",
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("MouseOnArgs() = %v, want %v", got, want)
 	}

@@ -282,6 +282,172 @@ func TestUpdate_ThreadLivenessMsg_UnknownThreadIDIsNoop(t *testing.T) {
 	}
 }
 
+// TestUpdate_ThreadLiveUpdateMsg_PatchesOnlyTheTargetedRow covers ADR
+// 0002's live-update message: the codex App Server pushes a
+// message/token count and the UI patches the matching row in place
+// (no full Refresh, no notify-hook involvement, no status
+// re-derivation). The fixture's t2 starts at MessageCount=4,
+// TokenCount=8200; the patch should land there and leave t1/t3 alone.
+func TestUpdate_ThreadLiveUpdateMsg_PatchesOnlyTheTargetedRow(t *testing.T) {
+	m := newFixtureModel()
+	updated, cmd := m.Update(ThreadLiveUpdateMsg{
+		ThreadID:     "t2",
+		MessageCount: 7,
+		TokenCount:   12345,
+	})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Fatalf("expected no follow-up Cmd, got %v", cmd)
+	}
+	for _, r := range m.rows {
+		switch r.Thread.ID {
+		case "t2":
+			if r.Thread.MessageCount != 7 {
+				t.Errorf("t2 MessageCount = %d, want 7", r.Thread.MessageCount)
+			}
+			if r.Thread.TokenCount != 12345 {
+				t.Errorf("t2 TokenCount = %d, want 12345", r.Thread.TokenCount)
+			}
+		case "t1", "t3":
+			if r.Thread.MessageCount != -1 {
+				t.Errorf("%s MessageCount = %d, want -1 (untouched)", r.Thread.ID, r.Thread.MessageCount)
+			}
+			if r.Thread.TokenCount != -1 {
+				t.Errorf("%s TokenCount = %d, want -1 (untouched)", r.Thread.ID, r.Thread.TokenCount)
+			}
+		}
+	}
+}
+
+// TestUpdate_ThreadLiveUpdateMsg_NegativeSentinelSkipsThatField is the
+// half of the contract that lets one event carry only a token-usage
+// delta without clobbering a known message count, and vice versa.
+// The manager emits a single Event per coalesced notification with
+// either field set to -1 to mean "no change for this field" — the UI
+// must respect that, otherwise a token-only update would zero out the
+// message count on the same row.
+func TestUpdate_ThreadLiveUpdateMsg_NegativeSentinelSkipsThatField(t *testing.T) {
+	m := newFixtureModel()
+	// t2 fixture: MessageCount=4, TokenCount=8200. Send a token-only
+	// update (MessageCount explicitly set to the -1 sentinel); the
+	// handler must skip that field and leave the fixture's known 4
+	// intact. Note the -1 is the contract from codexserver.Event
+	// ("no change for this field"), not a Go zero value — 0 is a
+	// valid "zero known messages" count and must patch.
+	updated, _ := m.Update(ThreadLiveUpdateMsg{
+		ThreadID:     "t2",
+		MessageCount: -1,
+		TokenCount:   9999,
+	})
+	m = updated.(Model)
+	for _, r := range m.rows {
+		if r.Thread.ID != "t2" {
+			continue
+		}
+		if r.Thread.MessageCount != 4 {
+			t.Errorf("MessageCount = %d, want 4 (unchanged by a token-only update)", r.Thread.MessageCount)
+		}
+		if r.Thread.TokenCount != 9999 {
+			t.Errorf("TokenCount = %d, want 9999", r.Thread.TokenCount)
+		}
+	}
+}
+
+// TestUpdate_ThreadLaunchedMsg_FiresLiveSubscribe locks in the
+// ADR 0002 contract that the UI calls Actions.LiveSubscribe for a
+// freshly-launched thread — otherwise the manager never opens a
+// live event stream and the new row's counts will lag behind the
+// server until the user does a manual Refresh. We don't drive a
+// real Manager here (the ui package must not import codexserver);
+// the test asserts only the call boundary.
+func TestUpdate_ThreadLaunchedMsg_FiresLiveSubscribe(t *testing.T) {
+	var got []string
+	actions := Actions{
+		CheckLiveness: func(threadID string) tea.Cmd { return nil },
+		LiveSubscribe: func(threadID string) tea.Cmd {
+			got = append(got, threadID)
+			return nil
+		},
+	}
+	m := newFixtureModel().WithActions(actions)
+	newRow := Row{Thread: codexstate.Thread{ID: "new-live", Title: "New live thread"}, Status: tmuxstatus.StatusWorking}
+	_, _ = m.Update(ThreadLaunchedMsg{Row: newRow})
+	if len(got) != 1 || got[0] != "new-live" {
+		t.Errorf("LiveSubscribe calls = %v, want [new-live]", got)
+	}
+}
+
+// TestUpdate_ArchiveDoneMsg_FiresLiveUnsubscribe is the matching
+// half: when a thread is archived and the row leaves the list, the
+// UI must ask the manager to drop the subscription so the App Server
+// stops streaming events the cockpit no longer renders.
+func TestUpdate_ArchiveDoneMsg_FiresLiveUnsubscribe(t *testing.T) {
+	var got []string
+	actions := Actions{
+		LiveUnsubscribe: func(threadID string) tea.Cmd {
+			got = append(got, threadID)
+			return nil
+		},
+	}
+	m := newFixtureModel().WithActions(actions)
+	_, _ = m.Update(ArchiveDoneMsg{ThreadID: "t2", Note: "archived"})
+	if len(got) != 1 || got[0] != "t2" {
+		t.Errorf("LiveUnsubscribe calls = %v, want [t2]", got)
+	}
+}
+
+// TestUpdate_ThreadLivenessMsg_CloseFlipsToClosedAndUnsubscribes
+// verifies the third hook: when a liveness check downgrades a row to
+// StatusClosed, the UI must unsubscribe from the live event stream
+// (ADR 0002: only subscribe to alive threads). A no-op liveness
+// re-check that doesn't change the status must not churn the
+// subscription list.
+func TestUpdate_ThreadLivenessMsg_CloseFlipsToClosedAndUnsubscribes(t *testing.T) {
+	var sub, unsub []string
+	actions := Actions{
+		LiveSubscribe:   func(threadID string) tea.Cmd { sub = append(sub, threadID); return nil },
+		LiveUnsubscribe: func(threadID string) tea.Cmd { unsub = append(unsub, threadID); return nil },
+	}
+	m := newFixtureModel().WithActions(actions)
+	// t2 is StatusWaiting in the fixture. Flip it to Closed and
+	// expect a LiveUnsubscribe("t2") call.
+	updated, _ := m.Update(ThreadLivenessMsg{ThreadID: "t2", Status: tmuxstatus.StatusClosed})
+	m = updated.(Model)
+	if len(unsub) != 1 || unsub[0] != "t2" {
+		t.Errorf("LiveUnsubscribe calls = %v, want [t2]", unsub)
+	}
+	if len(sub) != 0 {
+		t.Errorf("expected no LiveSubscribe on a close flip, got %v", sub)
+	}
+	// Sanity: the row's status did flip to Closed.
+	for _, r := range m.rows {
+		if r.Thread.ID == "t2" && r.Status != tmuxstatus.StatusClosed {
+			t.Errorf("t2 Status = %v, want Closed", r.Status)
+		}
+	}
+	// And a no-op liveness re-check (same status) must not churn.
+	updated, _ = m.Update(ThreadLivenessMsg{ThreadID: "t2", Status: tmuxstatus.StatusClosed})
+	_ = updated.(Model)
+	if len(sub) != 0 || len(unsub) != 1 {
+		t.Errorf("subscription churn: sub=%v unsub=%v (expected no new calls)", sub, unsub)
+	}
+}
+
+// TestUpdate_ThreadLiveUpdateMsg_UnknownThreadIDIsNoop mirrors the
+// ThreadLivenessMsg no-op: a live-update for a thread the cockpit
+// isn't tracking (e.g. the server's subscription list is ahead of
+// the cockpit's row set after a quick re-launch) must be dropped
+// silently, not panic and not surface a status-line error.
+func TestUpdate_ThreadLiveUpdateMsg_UnknownThreadIDIsNoop(t *testing.T) {
+	m := newFixtureModel()
+	before := append([]Row(nil), m.rows...)
+	updated, _ := m.Update(ThreadLiveUpdateMsg{ThreadID: "missing", MessageCount: 1, TokenCount: 1})
+	m = updated.(Model)
+	if len(m.rows) != len(before) {
+		t.Fatalf("expected row count unchanged, got %d want %d", len(m.rows), len(before))
+	}
+}
+
 func TestUpdate_ThreadLaunchErrorMsg_ShowsErrorLine(t *testing.T) {
 	m := newFixtureModel()
 	updated, _ := m.Update(ThreadLaunchErrorMsg{Err: errors.New("boom")})

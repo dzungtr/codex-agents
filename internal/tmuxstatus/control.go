@@ -121,20 +121,33 @@ func RemainOnExitArgs() []string {
 	return []string{"set-option", "-g", "remain-on-exit", "on"}
 }
 
-// MouseOnArgs builds the argument list for `tmux set-option -g mouse on`.
-// Without this, mouse wheel events inside a cockpit-launched tmux pane are
-// not forwarded to the pane's foreground process as mouse escape sequences;
-// they fall through to whatever scroll behaviour the inner terminal/line
-// discipline defaults to (cycling input history inside a TUI composer,
-// scrolling the host shell's command history, etc) instead of scrolling
-// codex's own conversation. This must be applied via ChainArgs together
-// with the NewSessionArgs it guards, in a single tmux invocation — same
-// rationale as RemainOnExitArgs: bare `set-option -g` between separate
-// tmux process invocations is not guaranteed to find a live server to
-// talk to, whereas chaining after new-session starts the server if needed
-// and applies the option before the new-session creates the pane.
+// MouseOnArgs builds the argument list for tmux options that make mouse
+// wheel scrolling inside a cockpit-launched pane scroll the application's
+// conversation history instead of cycling input history.
+//
+// It enables `set-option -g mouse on` so tmux intercepts wheel events,
+// then rebinds `WheelUpPane`/`WheelDownPane` in the root key table to send
+// `PageUp`/`PageDown` to the pane's foreground process. Codex's TUI maps
+// Up/Down arrows to input-history navigation and PageUp/PageDown to
+// conversation-history scrolling; tmux's default wheel bindings send
+// Up/Down, so without the rebinding a user scrolling inside an attached
+// thread's pane would cycle through previous prompts rather than scrolling
+// the conversation.
+//
+// This must be applied via ChainArgs together with the NewSessionArgs it
+// guards, in a single tmux invocation — same rationale as RemainOnExitArgs:
+// bare `set-option -g` between separate tmux process invocations is not
+// guaranteed to find a live server to talk to, whereas chaining after
+// new-session starts the server if needed and applies the option before the
+// new-session creates the pane.
 func MouseOnArgs() []string {
-	return []string{"set-option", "-g", "mouse", "on"}
+	return []string{
+		"set-option", "-g", "mouse", "on",
+		";",
+		"bind-key", "-T", "root", "WheelUpPane", "send-keys", "-N", "1", "PageUp",
+		";",
+		"bind-key", "-T", "root", "WheelDownPane", "send-keys", "-N", "1", "PageDown",
+	}
 }
 
 // wheelForwardFormat is the condition shared by WheelUpArgs and
