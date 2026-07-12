@@ -150,6 +150,55 @@ func MouseOnArgs() []string {
 	}
 }
 
+// wheelForwardFormat is the condition shared by WheelUpArgs and
+// WheelDownArgs: forward the wheel event to the pane as a real mouse
+// escape sequence (`send-keys -M`) whenever the pane is in copy mode
+// (already scrolling the tmux scrollback — keep that working) or in the
+// alternate screen (a fullscreen TUI like codex's, which is the case
+// the previous MouseOnArgs change was added for and where the default
+// 3.5+ wheel bindings otherwise translate wheel events into 3x Up/Down
+// arrow keys — which codex (legacy) binds to cycling input history, the
+// exact wrong target).
+const wheelForwardFormat = "#{||:#{pane_in_mode},#{alternate_on}}"
+
+// WheelUpArgs builds the argument list for `tmux bind-key -n
+// WheelUpPane ...`. It overrides tmux's default wheel-up binding so the
+// event reaches the pane's foreground process as a real mouse escape
+// sequence (via `send-keys -M`) rather than as 3x Up arrow keys
+// (tmux 3.5+ default in alt-screen) or as PageUp (older tmux) — both of
+// which codex (legacy) maps to cycling the input history instead of
+// scrolling the conversation. Outside copy/alt mode the binding falls
+// back to `copy-mode -e`, preserving the default behaviour of opening
+// the tmux scrollback for the user. Must be chained via ChainArgs
+// alongside MouseOnArgs and NewSessionArgs in the same tmux invocation
+// (same rationale as RemainOnExitArgs: bare `bind-key -n` between
+// separate tmux process invocations is not guaranteed to find a live
+// server to talk to, whereas chaining inside the same invocation
+// guarantees the binding is in place before the new-session's pane
+// forks its foreground process).
+func WheelUpArgs() []string {
+	return []string{
+		"bind-key", "-n", "WheelUpPane",
+		"if-shell", "-F", wheelForwardFormat,
+		"send-keys -M",
+		"copy-mode -e",
+	}
+}
+
+// WheelDownArgs builds the argument list for `tmux bind-key -n
+// WheelDownPane ...`. The mirror of WheelUpArgs: forward as a real
+// mouse event in copy/alt mode, and do nothing otherwise (matching
+// tmux's default WheelDownPane behaviour, which intentionally never
+// opens copy mode). See WheelUpArgs for the rationale on why the
+// override is needed and the same single-invocation chaining rule.
+func WheelDownArgs() []string {
+	return []string{
+		"bind-key", "-n", "WheelDownPane",
+		"if-shell", "-F", wheelForwardFormat,
+		"send-keys -M",
+	}
+}
+
 // ChainArgs joins multiple tmux command argument groups into the argument
 // list for a single tmux invocation, using tmux's own ";" command
 // separator so they run as one sequential command queue on the same
