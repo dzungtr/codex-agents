@@ -17,6 +17,7 @@ package subthread
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/dzungtr/codex-agents/internal/codexstate"
 	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
@@ -74,6 +75,17 @@ type Result struct {
 // error object on stdout.
 var ErrOperational = errors.New("subthread: operational error")
 
+// sleep and pollInterval are package vars (rather than constants) so the
+// wait-loop tests can shrink the poll cadence and stub out sleeping without
+// burning real wall-clock time. Production code uses time.Sleep and a 200ms
+// cadence (ADR 0003 decision 2: "--wait blocks up to N seconds"); tests swap
+// them to a no-op sleep and a 1ms interval so a fixture that completes after a
+// couple of polls returns in microseconds, not hundreds of milliseconds.
+var (
+	sleep        = time.Sleep
+	pollInterval = 200 * time.Millisecond
+)
+
 // StateProvider is the codexstate surface Output composes over. Production
 // code uses the real codexstate package (DefaultStateProvider); tests inject
 // a fake so the subthread module can be exercised without sqlite or rollout
@@ -112,7 +124,8 @@ func (DefaultStateProvider) ReadTurns(rolloutPath string) (codexstate.Turns, err
 // inject a fake.
 type LivenessProvider func(threadID string) bool
 
-// Output resolves a thread id to its latest completed turn. The contract it
+// Output resolves a thread id to its latest completed turn, optionally
+// blocking up to wait for a completed turn to appear. The contract it
 // implements (ADR 0003 decision 2):
 //
 //   - thread found, ≥1 completed turn, latest turn ended → StatusDone,
@@ -127,9 +140,53 @@ type LivenessProvider func(threadID string) bool
 //   - thread not found (ErrThreadNotFound) → StatusGone; caller exits 3.
 //   - sqlite unreadable / rollout missing → ErrOperational; caller exits 1.
 //
+// wait is the --wait N blocking-poll sugar (ADR 0003 decision 2). A wait of
+// zero (or negative) is the point-in-time poll from #28: read the rollout
+// once and return. A positive wait re-reads the rollout on a pollInterval
+// cadence until the status is no longer StatusWorking (a turn completed or
+// the thread went away) or the deadline elapses, whichever is first. On
+// timeout the last StatusWorking result is returned (caller exits 2). The
+// loop reuses the same rollout turn-reading — no new parsing — and returns
+// the instant a non-working status appears, so a turn completing mid-wait
+// does not wait out the full N (issue #32).
+//
 // codexHome is $CODEX_HOME (or its ~/.codex default), passed in by the caller
 // so this package has no filesystem-root knowledge of its own.
-func Output(state StateProvider, live LivenessProvider, codexHome, threadID string) (Result, error) {
+func Output(state StateProvider, live LivenessProvider, codexHome, threadID string, wait time.Duration) (Result, error) {
+	res, err := outputOnce(state, live, codexHome, threadID)
+	if err != nil {
+		return res, err
+	}
+	if wait <= 0 || res.Status != StatusWorking {
+		return res, nil
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return res, nil
+		}
+		interval := pollInterval
+		if remaining < interval {
+			interval = remaining
+		}
+		sleep(interval)
+		res, err = outputOnce(state, live, codexHome, threadID)
+		if err != nil {
+			return res, err
+		}
+		if res.Status != StatusWorking {
+			return res, nil
+		}
+	}
+}
+
+// outputOnce is the point-in-time rollout read behind Output — the #28
+// behaviour. Output calls it for the initial poll and (when wait > 0) on
+// every iteration of the wait loop, so the blocking and non-blocking paths
+// share exactly the same turn-reading (ADR 0003 decision 3: rollout is the
+// sole source of truth, no new parsing in the wait loop).
+func outputOnce(state StateProvider, live LivenessProvider, codexHome, threadID string) (Result, error) {
 	thread, err := state.FindThread(codexHome, threadID)
 	if err != nil {
 		if errors.Is(err, codexstate.ErrThreadNotFound) {

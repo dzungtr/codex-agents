@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dzungtr/codex-agents/internal/codexstate"
 	"github.com/dzungtr/codex-agents/internal/subthread"
@@ -229,4 +230,139 @@ func captureStdout(t *testing.T, fn func()) string {
 	defer func() { stdout = orig }()
 	fn()
 	return buf.String()
+}
+
+// flipState scripts a working→done transition across ReadTurns calls, the
+// cmd/cdxa mirror of internal/subthread's waitTestState. The first flipAfter
+// reads return `working` (in-progress, exit 2); later reads return `done`
+// (completed turn, exit 0). It lets the --wait flag tests exercise the
+// poll loop through runOutput without a real rollout file.
+type flipState struct {
+	threads   map[string]codexstate.Thread
+	working   codexstate.Turns
+	done      codexstate.Turns
+	flipAfter int
+	calls     int
+}
+
+func (f *flipState) FindThread(_ string, threadID string) (codexstate.Thread, error) {
+	if th, ok := f.threads[threadID]; ok {
+		return th, nil
+	}
+	return codexstate.Thread{}, codexstate.ErrThreadNotFound
+}
+
+func (f *flipState) ReadTurns(rolloutPath string) (codexstate.Turns, error) {
+	f.calls++
+	if f.calls > f.flipAfter {
+		return f.done, nil
+	}
+	return f.working, nil
+}
+
+// cdxaFastPoll shrinks subthread's poll cadence and stubs out sleeping for the
+// --wait tests, restoring on cleanup. It pokes the subthread package's
+// unexported sleep/pollInterval vars via the same seam the internal tests
+// use — but those are unexported, so cdxa tests can't reach them directly.
+// Instead we keep wait values tiny (a few ms) so even at the 200ms cadence
+// the loop only sleeps once before the deadline elapses; the flip fixtures
+// complete on the first re-read. This keeps the test fast without touching
+// subthread's internals.
+func cdxaFastPoll(t *testing.T) {
+	t.Helper()
+	subthread.SetTestPollInterval(time.Millisecond)
+	subthread.SetTestSleep(func(time.Duration) {})
+	t.Cleanup(func() { subthread.RestoreTestPollDefaults() })
+}
+
+func TestRunOutput_WaitFlagZeroMatchesOmitted(t *testing.T) {
+	// --wait 0 must produce the same exit code and JSON as the omitted flag
+	// (issue #28 behaviour). Both should read the rollout exactly once.
+	state := fakeState{
+		threads: map[string]codexstate.Thread{"t1": {ID: "t1", RolloutPath: "/r/t1.jsonl"}},
+		turns:   map[string]codexstate.Turns{"/r/t1.jsonl": {Completed: []codexstate.Turn{{Number: 1, Message: "done"}}, InProgress: true}},
+	}
+	d := deps{state: state, live: func(string) bool { return true }, codexHome: "/codex"}
+
+	out0 := captureStdout(t, func() {
+		if code, err := runOutput([]string{"--wait", "0", "t1"}, d); err != nil || code != exitWorking {
+			t.Errorf("--wait 0: code=%d err=%v, want %d", code, err, exitWorking)
+		}
+	})
+	outOmit := captureStdout(t, func() {
+		if code, err := runOutput([]string{"t1"}, d); err != nil || code != exitWorking {
+			t.Errorf("omitted: code=%d err=%v, want %d", code, err, exitWorking)
+		}
+	})
+	if out0 != outOmit {
+		t.Errorf("--wait 0 differs from omitted:\nwait0:  %q\nomit:   %q", out0, outOmit)
+	}
+}
+
+func TestRunOutput_WaitTurnCompletesMidWaitExit0(t *testing.T) {
+	cdxaFastPoll(t)
+	state := &flipState{
+		threads: map[string]codexstate.Thread{"t1": {ID: "t1", RolloutPath: "/r/t1.jsonl"}},
+		working: codexstate.Turns{
+			Completed:  []codexstate.Turn{{Number: 1, Message: "wip"}},
+			InProgress: true,
+		},
+		done: codexstate.Turns{
+			Completed: []codexstate.Turn{
+				{Number: 1, Message: "wip"},
+				{Number: 2, Message: "finished"},
+			},
+			InProgress: false,
+		},
+		flipAfter: 1,
+	}
+	d := deps{state: state, live: func(string) bool { return true }, codexHome: "/codex"}
+
+	out := captureStdout(t, func() {
+		if code, err := runOutput([]string{"--wait", "30", "t1"}, d); err != nil || code != exitDone {
+			t.Errorf("code=%d err=%v, want %d (done)", code, err, exitDone)
+		}
+	})
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(out), &obj); err != nil {
+		t.Fatalf("stdout not valid JSON: %v (got %q)", err, out)
+	}
+	if got, _ := obj["status"].(string); got != "done" {
+		t.Errorf("status = %q, want done", got)
+	}
+	if got, _ := obj["turn"].(float64); int(got) != 2 {
+		t.Errorf("turn = %v, want 2", got)
+	}
+	if got, _ := obj["message"].(string); got != "finished" {
+		t.Errorf("message = %q, want finished", got)
+	}
+	if state.calls != 2 {
+		t.Errorf("ReadTurns called %d times, want 2 (initial working + flip to done)", state.calls)
+	}
+}
+
+func TestRunOutput_WaitTimeoutStillWorkingExit2(t *testing.T) {
+	cdxaFastPoll(t)
+	state := &flipState{
+		threads: map[string]codexstate.Thread{"t1": {ID: "t1", RolloutPath: "/r/t1.jsonl"}},
+		working: codexstate.Turns{
+			Completed:  []codexstate.Turn{{Number: 1, Message: "still wip"}},
+			InProgress: true,
+		},
+		flipAfter: 1 << 30, // never flips
+	}
+	d := deps{state: state, live: func(string) bool { return true }, codexHome: "/codex"}
+
+	out := captureStdout(t, func() {
+		if code, err := runOutput([]string{"--wait", "1", "t1"}, d); err != nil || code != exitWorking {
+			t.Errorf("code=%d err=%v, want %d (working, timed out)", code, err, exitWorking)
+		}
+	})
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(out), &obj); err != nil {
+		t.Fatalf("stdout not valid JSON: %v (got %q)", err, out)
+	}
+	if got, _ := obj["status"].(string); got != "working" {
+		t.Errorf("status = %q, want working", got)
+	}
 }
