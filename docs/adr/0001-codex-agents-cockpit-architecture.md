@@ -40,6 +40,16 @@ git_branch, archived, recency, rollout_path — using a pure-Go sqlite driver (n
 
 Consequence: every codex conversation appears in the cockpit — including ones started in a
 plain terminal — not just cockpit-launched ones.
+ 
+ **Thread identity is codex's id, not a cockpit-minted UUID (ratified by #47/#48).** The
+ interactive launch path (`internal/codexlaunch.Launcher.Launch`) blocks until codex has
+ written the freshly-launched thread to its sqlite, then adopts codex's id as the row's
+ `Thread.ID` and as the key for `agentstate` and the notify-hook event log. The cockpit
+ mints no UUID of its own for thread identity — the tmux session name (`cxa-<prefix>`) is
+ the cockpit's own handle and is deliberately decoupled from thread identity. This brings
+ the interactive launch path into compliance with this decision and with ADR 0003 decision
+ 4 (`spawn` returns codex's own thread id); prior to #47 it contradicted both by minting a
+ cockpit UUID that codex never wrote, producing duplicate rows after attach-then-detach.
 
 ### 3. tmux-per-thread process model
 
@@ -122,3 +132,15 @@ merged — see #2–#6)._
   launches against real repositories occurred. **Open, pending human measurement**: to be
   measured during actual daily use of codex-agents (e.g. wall-clock time from launch to a
   usable attached session, across a few representative repo sizes).
+ 
+ **Thread identity = codex's id (decision 2, ratified by #47/#48)**: _stub — to be filled
+ by the results-promotion step after the code PR for #49 merges._ Promote here:
+   - whether the blocking-poll launch path eliminated the duplicate-row repro from #47
+     (regression test in `internal/ui` is the fixture-level evidence; the human-run
+     attach-then-detach check is the production confirmation);
+   - the observed launch-to-registered latency against a real codex sqlite (the 30s
+     `DefaultRegistrationWait` bound is asserted, but the typical wait was never observed
+     against a real thread — same gap ADR 0003 flags);
+   - whether re-keying `agentstate` and `events.jsonl` by codex's id made
+     `turnEndedByThread`/`hiddenByThread` lookups in `loadRows` land on codex's rows
+     (i.e. working→waiting transitions now fire correctly for cockpit-launched threads).
