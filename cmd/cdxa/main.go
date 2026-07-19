@@ -42,6 +42,10 @@ type deps struct {
 	// reused by spawn (which writes launch bookkeeping to the same file the
 	// cockpit reads — ADR 0001 decision 2).
 	statePath string
+	// replier builds a subthread.Replier for runSend. nil in production
+	// (newReplier is used); tests set it to inject a fake-wired Replier, the
+	// same DI pattern runSpawn uses for the spawner factory.
+	replier replierFn
 	// spawner builds a subthread.Spawner for runSpawn. nil in production
 	// (newSpawner is used); tests set it to inject a fake-wired Spawner, the
 	// same DI pattern runOutput uses for state/live.
@@ -66,21 +70,21 @@ func main() {
 func run(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "cdxa: usage: cdxa <command> [args]")
-		fmt.Fprintln(os.Stderr, "commands: output, spawn, (send — upcoming)")
+		fmt.Fprintln(os.Stderr, "commands: output, spawn, send")
 		return 1
 	}
 
 	cmds := map[string]command{
 		"output": runOutput,
 		"spawn":  runSpawn,
-		// "send" is added by sibling slice #31.
+		"send":   runSend,
 	}
 
 	name := args[0]
 	cmd, ok := cmds[name]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "cdxa: unknown command %q\n", name)
-		fmt.Fprintln(os.Stderr, "commands: output, spawn, (send — upcoming)")
+		fmt.Fprintln(os.Stderr, "commands: output, spawn, send")
 		return 1
 	}
 
