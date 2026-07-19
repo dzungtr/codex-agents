@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -160,7 +161,7 @@ func run() error {
 		Refresh:         refreshAction(codexHome, statePath),
 		QuickReply:      quickReplyAction(launcher),
 		Interrupt:       interruptAction(launcher.Tmux, statePath),
-		Archive:         archiveAction(launcher, statePath),
+		Archive:         archiveAction(launcher, statePath, codexArchive),
 		CheckLiveness:   checkLivenessAction(statePath),
 		LiveSubscribe:   silentLiveCmd(mgr.Subscribe),
 		LiveUnsubscribe: silentLiveCmd(mgr.Unsubscribe),
@@ -470,11 +471,19 @@ func interruptAction(tmux tmuxstatus.Runner, statePath string) func(row ui.Row) 
 // archiveAction adapts kill-session + agentstate hiding + worktree cleanup
 // into a ui.Actions.Archive hook (PRD #1's List behavior -> Archive row):
 // kill the tmux session if alive, mark the thread hidden in the cockpit's
-// own state (codexstate has no codex-sanctioned archive write path — see
-// agentstate.Entry.Hidden), then offer worktree removal via
-// archiveWorktree. Archiving never touches codex's own sqlite/jsonl
-// records, preserving the read-only guarantee.
-func archiveAction(launcher *codexlaunch.Launcher, statePath string) func(row ui.Row) tea.Cmd {
+// own state, offer worktree removal via archiveWorktree, and finally ask
+// codex itself to archive the session via `codex archive <id>`. That last
+// step closes the gap from issue #44: without it the cockpit only hid the
+// thread locally, leaving codex's sqlite/jsonl record intact so the thread
+// resurfaced in `codex resume` and in any cockpit whose state.json lost
+// the Hidden flag. `codex archive` is the codex-sanctioned soft archive
+// (reversible via `codex unarchive`), matching the cockpit's own Hidden
+// semantics; it never touches the tmux session or worktree, so the prior
+// teardown steps run unconditionally first.
+// The codexArchiver seam (defaulting to codexArchive) is exposed so tests
+// can stub the `codex archive` shell-out rather than depending on a real
+// codex binary being installed and a valid session id.
+func archiveAction(launcher *codexlaunch.Launcher, statePath string, archiveInCodex codexArchiver) func(row ui.Row) tea.Cmd {
 	return func(row ui.Row) tea.Cmd {
 		return func() tea.Msg {
 			if row.Status != tmuxstatus.StatusClosed {
@@ -492,9 +501,43 @@ func archiveAction(launcher *codexlaunch.Launcher, statePath string) func(row ui
 			if wtNote := archiveWorktree(launcher, statePath, row.Thread.ID); wtNote != "" {
 				note += "; " + wtNote
 			}
+			if codexNote := archiveInCodex(row.Thread.ID); codexNote != "" {
+				note += "; " + codexNote
+			}
 			return ui.ArchiveDoneMsg{ThreadID: row.Thread.ID, Note: note}
 		}
 	}
+}
+
+// codexArchiver archives a codex thread by id via `codex archive`, returning
+// a human-readable note for the ArchiveDoneMsg ("" on success). See
+// codexArchive for the production implementation.
+type codexArchiver func(threadID string) string
+
+// codexArchive asks codex to archive its own record of threadID via
+// `codex archive <threadID>`. This is the write path the cockpit's own
+// read-only codexstate access deliberately lacks (issue #44): without it,
+// a cockpit-archived thread stays resumable via `codex resume` and
+// reappears in any cockpit that regenerates state.json. Best-effort:
+// codex may be absent from $PATH or the thread id may predate codex's
+// archive support, in which case the rest of archiveAction (tmux kill,
+// hide, worktree removal) has already succeeded — so a failure here is
+// surfaced as a human-readable note rather than aborting the archive.
+// Returns "" on success.
+func codexArchive(threadID string) string {
+	codexPath, err := exec.LookPath("codex")
+	if err != nil {
+		return "codex archive skipped: codex not on PATH"
+	}
+	out, err := exec.Command(codexPath, "archive", threadID).CombinedOutput()
+	if err != nil {
+		trimmed := strings.TrimSpace(string(out))
+		if trimmed == "" {
+			return fmt.Sprintf("codex archive failed: %v", err)
+		}
+		return fmt.Sprintf("codex archive failed: %v: %s", err, trimmed)
+	}
+	return "codex archived"
 }
 
 // archiveWorktree looks up threadID's recorded worktree path (agentstate's

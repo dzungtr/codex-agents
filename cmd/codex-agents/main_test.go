@@ -305,7 +305,7 @@ func TestArchiveAction_ClosedThreadWithNoWorktree_HidesWithoutKillingSession(t *
 	}
 	tmux := &fakeTmuxRunner{}
 	launcher := &codexlaunch.Launcher{Git: codexlaunch.ExecGitRunner{}, Tmux: tmux, StatePath: statePath}
-	action := archiveAction(launcher, statePath)
+	action := archiveAction(launcher, statePath, noopArchiver)
 
 	row := ui.Row{Thread: rowThread("t1", "Done thread"), Status: tmuxstatus.StatusClosed}
 	msg := action(row)()
@@ -340,7 +340,7 @@ func TestArchiveAction_AliveThread_KillsSession(t *testing.T) {
 	}
 	tmux := &fakeTmuxRunner{}
 	launcher := &codexlaunch.Launcher{Git: codexlaunch.ExecGitRunner{}, Tmux: tmux, StatePath: statePath}
-	action := archiveAction(launcher, statePath)
+	action := archiveAction(launcher, statePath, noopArchiver)
 
 	row := ui.Row{Thread: rowThread("t1", "Alive thread"), Status: tmuxstatus.StatusWorking}
 	if _, ok := action(row)().(ui.ArchiveDoneMsg); !ok {
@@ -391,7 +391,7 @@ func TestArchiveAction_CleanWorktree_IsRemoved(t *testing.T) {
 	}
 	tmux := &fakeTmuxRunner{}
 	launcher := &codexlaunch.Launcher{Git: codexlaunch.ExecGitRunner{}, Tmux: tmux, StatePath: statePath}
-	action := archiveAction(launcher, statePath)
+	action := archiveAction(launcher, statePath, noopArchiver)
 
 	row := ui.Row{Thread: rowThread("t1", "Merged thread"), Status: tmuxstatus.StatusClosed}
 	msg := action(row)()
@@ -420,7 +420,7 @@ func TestArchiveAction_DirtyWorktree_IsKeptWithReason(t *testing.T) {
 	}
 	tmux := &fakeTmuxRunner{}
 	launcher := &codexlaunch.Launcher{Git: codexlaunch.ExecGitRunner{}, Tmux: tmux, StatePath: statePath}
-	action := archiveAction(launcher, statePath)
+	action := archiveAction(launcher, statePath, noopArchiver)
 
 	row := ui.Row{Thread: rowThread("t1", "Dirty thread"), Status: tmuxstatus.StatusClosed}
 	msg := action(row)()
@@ -448,10 +448,90 @@ func TestArchiveAction_DirtyWorktree_IsKeptWithReason(t *testing.T) {
 	}
 }
 
+// TestArchiveAction_CodexArchiver_InvokedWithThreadID is the issue #44
+// regression test: archiving a thread must call the codex archiver with
+// the thread's id, and its success note must be surfaced in the
+// ArchiveDoneMsg so the user sees codex's own record was archived too.
+func TestArchiveAction_CodexArchiver_InvokedWithThreadID(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	if err := agentstate.Upsert(statePath, "t1", agentstate.Entry{TmuxSession: "cxa-t1"}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	tmux := &fakeTmuxRunner{}
+	launcher := &codexlaunch.Launcher{Git: codexlaunch.ExecGitRunner{}, Tmux: tmux, StatePath: statePath}
+	archiver := &recordingArchiver{note: "codex archived"}
+	action := archiveAction(launcher, statePath, archiver.archive)
+
+	row := ui.Row{Thread: rowThread("t1", "Done thread"), Status: tmuxstatus.StatusClosed}
+	done, ok := action(row)().(ui.ArchiveDoneMsg)
+	if !ok {
+		t.Fatalf("expected ArchiveDoneMsg, got %#v", action(row)())
+	}
+	if archiver.calledWith != "t1" {
+		t.Errorf("codex archiver called with %q, want t1", archiver.calledWith)
+	}
+	if !strings.Contains(done.Note, "codex archived") {
+		t.Errorf("Note = %q, want it to include the codex archiver's note", done.Note)
+	}
+}
+
+// TestArchiveAction_CodexArchiveFailure_AppendsNoteWithoutAborting verifies
+// the codex archive step is best-effort (issue #44): if `codex archive`
+// fails (e.g. codex absent, or session id unknown), the rest of the
+// archive - tmux kill, hide, worktree refusal - has already succeeded, so
+// the failure is surfaced as a note rather than aborting into a
+// ThreadLaunchErrorMsg.
+func TestArchiveAction_CodexArchiveFailure_AppendsNoteWithoutAborting(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	if err := agentstate.Upsert(statePath, "t1", agentstate.Entry{TmuxSession: "cxa-t1"}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	tmux := &fakeTmuxRunner{}
+	launcher := &codexlaunch.Launcher{Git: codexlaunch.ExecGitRunner{}, Tmux: tmux, StatePath: statePath}
+	archiver := &recordingArchiver{note: "codex archive failed: no such session"}
+	action := archiveAction(launcher, statePath, archiver.archive)
+
+	row := ui.Row{Thread: rowThread("t1", "Done thread"), Status: tmuxstatus.StatusClosed}
+	msg := action(row)()
+
+	done, ok := msg.(ui.ArchiveDoneMsg)
+	if !ok {
+		t.Fatalf("expected ArchiveDoneMsg (not an error) even when codex archive fails, got %#v", msg)
+	}
+	if !strings.Contains(done.Note, "codex archive failed: no such session") {
+		t.Errorf("Note = %q, want it to surface the codex archive failure", done.Note)
+	}
+	st, err := agentstate.Load(statePath)
+	if err != nil {
+		t.Fatalf("Load state: %v", err)
+	}
+	if !st.Threads["t1"].Hidden {
+		t.Errorf("expected thread hidden even though codex archive failed, got %+v", st.Threads["t1"])
+	}
+}
+
 // rowThread builds a minimal codexstate.Thread for action tests that only
 // need an ID and Title.
 func rowThread(id, title string) codexstate.Thread {
 	return codexstate.Thread{ID: id, Title: title}
+}
+
+// noopArchiver is a codexArchiver stub that reports success and records
+// nothing - used by archiveAction tests that exercise the tmux/hide/
+// worktree path and don't care about the `codex archive` step.
+func noopArchiver(string) string { return "" }
+
+// recordingArchiver is a codexArchiver stub that captures the thread id it
+// was called with and returns a fixed note, so tests can assert the
+// archive step ran with the right id and that its note is surfaced.
+type recordingArchiver struct {
+	calledWith string
+	note       string
+}
+
+func (r *recordingArchiver) archive(threadID string) string {
+	r.calledWith = threadID
+	return r.note
 }
 
 // TestApplyProfileFallback_FillsEmptyProfileFromState is the Bug 2
