@@ -112,6 +112,79 @@ it ever earns one.
 
 ## Measured results
 
-_To be filled at initiative close: spawn-to-registered latency, typical
-poll intervals observed in real delegation prompts, rollout-parse
-failures encountered across codex upgrades._
+Promoted at initiative close (epic #27, all six slices merged via PRs
+#36–#41). The implementation is **fixture-verified, not yet deployed**
+against real codex threads — there is no production telemetry yet. What
+follows is what the tests actually assert.
+
+### What shipped
+
+- `cdxa` binary with `spawn`, `output`, and `send` subcommands;
+  `--workspace worktree|inplace` on `spawn`; `--wait N` on `output`.
+- New deep module `internal/subthread` exposing `Spawn` / `Output` /
+  `Send` behind one interface; `cmd/cdxa` is thin flag-and-JSON wiring.
+- Extensions to `internal/codexstate` (`ReadTurns` for rollout turn
+  markers + `InProgress` flag, `FindThread`/`ThreadRegistered`) and
+  `internal/codexlaunch` (`HeadlessLaunch` identity path).
+- Cookbook at `docs/cdxa-subthread-cookbook.md` — the canonical
+  reference for the exit-code contract, with copy-pasteable
+  parent-thread prompts.
+
+### Exit-code contract (frozen)
+
+`0` = completed turn available, `2` = still working, `3` =
+unknown/gone, `1` = operational error. Verified via table tests in
+`cmd/cdxa` (`exitCodeFor`) and the done/working/gone/unknown/operational
+arms in `internal/subthread`. The contract is canonical in the cookbook
+and hard-coded into copy-pasteable parent-thread prompt snippets.
+
+### Turn semantics verified
+
+`turn` is a monotonic counter derived from rollout turn markers on
+every call — no cursors, no stored state (`codexstate.ReadTurns`
+returns `Completed` turns plus an `InProgress` flag). `send` returns
+the turn its message started (the next turn to complete, i.e. one past
+the current completed/in-flight count), so the parent's next `output`
+poll targets exactly that turn. Cross-checked across
+`codexstate.ReadTurns`, `subthread.Output`, and `subthread.Send`.
+
+### Workspace modes verified
+
+`worktree` (default) creates an isolated git worktree + detached tmux
+session; `inplace` runs in the caller's cwd with no worktree. Both
+verified via fake-launcher tests. Sandbox hardening for `inplace` is
+deferred (decision 6 — discipline by prompt convention).
+
+### `--wait` deadline precision
+
+The wait loop clamps the final sleep to the remaining time rather than
+overshooting by a full interval (`remaining := time.Until(deadline)`,
+clamped when below the poll interval). Tests assert `elapsed ≤ 500ms`
+for a 50ms deadline, and that `Output` returns immediately when a turn
+completes mid-wait. `--wait 0` and the omitted flag behave identically
+to a single point-in-time poll.
+
+### Test coverage
+
+All 11 Go packages green (`go build ./...` + `go test ./...`). ~60+
+new tests across `cmd/cdxa`, `internal/subthread`,
+`internal/codexstate`, and `internal/codexlaunch`. Fixture style is
+pinned to the `state_5` schema, mirroring `codexstate`'s existing
+tests; fake launchers and fake registrars stand in for tmux/sqlite.
+
+### Not yet measured (requires real deployment)
+
+- Spawn-to-registered latency against a real codex sqlite (the 30s
+  `ErrRegistrationTimeout` bound is asserted, but the typical wait was
+  never observed against a real thread).
+- Typical poll intervals parent threads settle on in real delegation
+  prompts.
+- Rollout-parse failure modes across codex upgrades (schema drift is
+  inherited from ADR 0001's posture; only the happy path and malformed
+  lines were exercised in fixtures).
+
+These are the telemetry gaps to close in production use.
+
+### Ready-for-human items
+
+None. Every slice merged on round-1 review; zero fix rounds consumed.
