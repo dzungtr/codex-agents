@@ -16,7 +16,7 @@ import (
 	"github.com/dzungtr/codex-agents/internal/ui"
 )
 
-func TestLoadTurnEndedByThread_ReflectsAgentStateEntries(t *testing.T) {
+func TestTurnEndedByThread_ReflectsAgentStateEntries(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	if err := agentstate.Upsert(statePath, "waiting-thread", agentstate.Entry{
 		TmuxSession:   "cxa-waiting-thread",
@@ -30,7 +30,7 @@ func TestLoadTurnEndedByThread_ReflectsAgentStateEntries(t *testing.T) {
 		t.Fatalf("seed working-thread: %v", err)
 	}
 
-	got := loadTurnEndedByThread(statePath)
+	got := turnEndedByThread(loadAgentState(statePath))
 	if !got["waiting-thread"] {
 		t.Errorf("expected waiting-thread to report turnEnded=true, got %v", got)
 	}
@@ -45,15 +45,15 @@ func TestLoadTurnEndedByThread_ReflectsAgentStateEntries(t *testing.T) {
 // notify hook has never fired) must not error the whole list — every
 // thread simply reports turnEnded=false, matching plain tmux-liveness
 // status derivation.
-func TestLoadTurnEndedByThread_MissingStateDegradesToEmpty(t *testing.T) {
+func TestTurnEndedByThread_MissingStateDegradesToEmpty(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "does-not-exist", "state.json")
-	got := loadTurnEndedByThread(statePath)
+	got := turnEndedByThread(loadAgentState(statePath))
 	if len(got) != 0 {
 		t.Errorf("expected an empty map for a missing state file, got %v", got)
 	}
 }
 
-func TestLoadHiddenByThread_ReflectsAgentStateEntries(t *testing.T) {
+func TestHiddenByThread_ReflectsAgentStateEntries(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	if err := agentstate.Upsert(statePath, "archived-thread", agentstate.Entry{
 		TmuxSession: "cxa-archived-thread",
@@ -67,7 +67,7 @@ func TestLoadHiddenByThread_ReflectsAgentStateEntries(t *testing.T) {
 		t.Fatalf("seed live-thread: %v", err)
 	}
 
-	got := loadHiddenByThread(statePath)
+	got := hiddenByThread(loadAgentState(statePath))
 	if !got["archived-thread"] {
 		t.Errorf("expected archived-thread to report hidden=true, got %v", got)
 	}
@@ -76,9 +76,9 @@ func TestLoadHiddenByThread_ReflectsAgentStateEntries(t *testing.T) {
 	}
 }
 
-func TestLoadHiddenByThread_MissingStateDegradesToEmpty(t *testing.T) {
+func TestHiddenByThread_MissingStateDegradesToEmpty(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "does-not-exist", "state.json")
-	got := loadHiddenByThread(statePath)
+	got := hiddenByThread(loadAgentState(statePath))
 	if len(got) != 0 {
 		t.Errorf("expected an empty map for a missing state file, got %v", got)
 	}
@@ -452,4 +452,45 @@ func TestArchiveAction_DirtyWorktree_IsKeptWithReason(t *testing.T) {
 // need an ID and Title.
 func rowThread(id, title string) codexstate.Thread {
 	return codexstate.Thread{ID: id, Title: title}
+}
+
+// TestApplyProfileFallback_FillsEmptyProfileFromState is the Bug 2
+// regression test (issue #25): a cockpit-launched thread whose rollout
+// jsonl doesn't record a profile (or predates session_meta parsing) comes
+// back from codexstate with Profile == "". attachAction passes
+// row.Thread.Profile straight to Launcher.Resume, so an empty profile here
+// means `codex resume <id>` without `-p` — the resumed session runs on the
+// base config.toml model instead of the launch profile's. The fallback
+// must fill it from the cockpit's own state.json entry.
+func TestApplyProfileFallback_FillsEmptyProfileFromState(t *testing.T) {
+	rows := []ui.Row{
+		{Thread: codexstate.Thread{ID: "no-rollout-profile"}},
+		{Thread: codexstate.Thread{ID: "rollout-profile", Profile: "from-rollout"}},
+	}
+	st := agentstate.State{Threads: map[string]agentstate.Entry{
+		"no-rollout-profile": {Profile: "general-agentic"},
+		"rollout-profile":    {Profile: "from-state"},
+	}}
+
+	applyProfileFallback(rows, st)
+
+	if rows[0].Thread.Profile != "general-agentic" {
+		t.Errorf("expected empty profile filled from state.json, got %q", rows[0].Thread.Profile)
+	}
+	if rows[1].Thread.Profile != "from-rollout" {
+		t.Errorf("fallback must not clobber a non-empty codexstate profile, got %q", rows[1].Thread.Profile)
+	}
+}
+
+// TestApplyProfileFallback_MissingEntryLeavesProfileEmpty pins the other
+// side of the degrade posture: a thread with no state.json entry at all
+// (not cockpit-launched) keeps its empty profile — Resume's own
+// entry.Profile fallback then remains the only safety net, and a plain
+// `codex resume <id>` is still the correct behavior for foreign threads.
+func TestApplyProfileFallback_MissingEntryLeavesProfileEmpty(t *testing.T) {
+	rows := []ui.Row{{Thread: codexstate.Thread{ID: "foreign-thread"}}}
+	applyProfileFallback(rows, agentstate.State{Threads: map[string]agentstate.Entry{}})
+	if rows[0].Thread.Profile != "" {
+		t.Errorf("expected empty profile for thread with no state entry, got %q", rows[0].Thread.Profile)
+	}
 }

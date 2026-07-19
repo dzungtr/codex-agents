@@ -207,7 +207,7 @@ func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 	session := tmuxstatus.SessionName(threadID)
 	notifyArgs := l.notifyArgsFor(threadID, profile)
 	codexArgs := NewThreadArgs(NewThreadSpec{Profile: profile, Model: req.Model, Task: req.Task, Notify: notifyArgs})
-	tmuxArgs := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.NewSessionArgs(session, ws.WorkDir, codexArgs))
+	tmuxArgs := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(session, ws.WorkDir, codexArgs))
 
 	if err := l.Tmux.Run(tmuxArgs); err != nil {
 		return LaunchResult{}, fmt.Errorf("codexlaunch: start tmux session: %w", err)
@@ -276,7 +276,7 @@ func (l *Launcher) Resume(threadID, cwd, profile string) (LaunchResult, error) {
 	}
 
 	session := tmuxstatus.SessionName(threadID)
-	tmuxArgs := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.NewSessionArgs(session, cwd, ResumeArgs(threadID, resumeProfile)))
+	tmuxArgs := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(session, cwd, ResumeArgs(threadID, resumeProfile)))
 	if err := l.Tmux.Run(tmuxArgs); err != nil {
 		return LaunchResult{}, fmt.Errorf("codexlaunch: start resume tmux session: %w", err)
 	}

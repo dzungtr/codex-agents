@@ -97,8 +97,11 @@ type ThreadLaunchErrorMsg struct{ Err error }
 // to the cockpit (the user detached from tmux).
 type AttachDoneMsg struct{}
 
-// RowsRefreshedMsg carries a freshly reloaded row set that replaces the
-// model's current rows outright.
+// RowsRefreshedMsg carries a freshly reloaded row set that the model merges
+// into its current rows: refreshed rows are authoritative for the threads
+// they contain, while existing rows missing from the set are kept (a
+// just-launched thread isn't in codex's persisted record yet) unless the
+// model already saw them archived. See Update's RowsRefreshedMsg case.
 type RowsRefreshedMsg struct{ Rows []Row }
 
 // QuickReplySentMsg reports that a quick-reply's tmux send-keys delivery

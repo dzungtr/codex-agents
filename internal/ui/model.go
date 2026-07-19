@@ -71,6 +71,16 @@ type Model struct {
 	// Launch or Attach action, shown under the header until the next one.
 	statusLine string
 
+	// archivedIDs remembers thread IDs this model has already seen archived
+	// (via ArchiveDoneMsg). RowsRefreshedMsg's merge keeps existing rows
+	// that are missing from the refreshed set — that protects a
+	// just-launched thread codex hasn't persisted yet (issue #25 Bug 1),
+	// but an archived row looks exactly the same to the merge ("missing"),
+	// because loadRows filters archived threads out upstream. This set is
+	// how the merge tells "missing because not yet persisted" (keep) from
+	// "missing because archived" (drop).
+	archivedIDs map[string]bool
+
 	// actions are the side-effecting hooks the composer submit and
 	// row-Enter wire up to; see Actions' doc comment.
 	actions Actions
@@ -291,7 +301,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case RowsRefreshedMsg:
-		m.rows = append([]Row(nil), msg.Rows...)
+		// Merge rather than replace (issue #25 Bug 1): a refresh that
+		// fires in the window between a composer launch and codex
+		// persisting the new thread's record returns Rows that omit the
+		// launched thread, and a wholesale replace would silently drop
+		// its row until the next restart. Refreshed rows stay
+		// authoritative for threads they contain; existing rows missing
+		// from the refreshed set are kept — except ones this model has
+		// already seen archived (archivedIDs), which loadRows also
+		// filters out upstream and which must not be resurrected.
+		refreshedIDs := make(map[string]bool, len(msg.Rows))
+		for _, r := range msg.Rows {
+			refreshedIDs[r.Thread.ID] = true
+		}
+		merged := append([]Row(nil), msg.Rows...)
+		for _, r := range m.rows {
+			if refreshedIDs[r.Thread.ID] || m.archivedIDs[r.Thread.ID] {
+				continue
+			}
+			merged = append(merged, r)
+		}
+		m.rows = merged
 		sortRows(m.rows)
 		m.applyFilter()
 		return m, nil
@@ -306,6 +336,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case ArchiveDoneMsg:
 		m.rows = removeThread(m.rows, msg.ThreadID)
+		if m.archivedIDs == nil {
+			m.archivedIDs = make(map[string]bool)
+		}
+		m.archivedIDs[msg.ThreadID] = true
 		m.applyFilter()
 		m.statusLine = msg.Note
 		// ADR 0002: drop the App Server subscription for the

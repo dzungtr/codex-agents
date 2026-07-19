@@ -199,6 +199,59 @@ func WheelDownArgs() []string {
 	}
 }
 
+// extendedKeysVersionGuard is the tmux format condition shared by the
+// extended-keys lines in ModifierKeysArgs: true when the server's version
+// is 3.2 or later, i.e. new enough to know the `extended-keys` option
+// (added in tmux 3.2) and the `extkeys` terminal feature. The regex matches
+// 3.2–3.9, any 4.x–9.x, and any multi-digit major. Guarding with
+// `if-shell -F` on the built-in #{version} format keeps the same command
+// queue valid on older tmux builds — the unknown option/terminal-feature
+// never gets parsed there — instead of failing the whole chained
+// invocation (and with it the new-session that launches the thread) just
+// because the host tmux predates extended keys.
+const extendedKeysVersionGuard = `#{m/r:^(3\.[2-9]|[4-9]\.|[1-9][0-9]+\.),#{version}}`
+
+// ModifierKeysArgs builds the argument list for the tmux options that make
+// modified keys (Shift+Enter, Ctrl+Shift+U, Alt+Backspace, ...) reach a
+// cockpit-launched pane instead of being dropped by tmux. With tmux's
+// defaults, `xterm-keys` is off and no `extkeys` terminal feature is
+// advertised, so the outer terminal's xterm-style modifier escape
+// sequences arrive unrecognised and tmux swallows them before they ever
+// reach codex's TUI — the pane sees neither a newline nor a submit.
+//
+// Three layers, oldest-safest first:
+//   - `set-option -g xterm-keys on` (available since tmux 1.x): baseline
+//     decode of xterm-style modified keys into the pane.
+//   - `set-option -g extended-keys on` (tmux 3.2+): enables the
+//     extended-keys (CSI u / kitty keyboard protocol) path, which is what
+//     unambiguously encodes combos like Shift+Enter.
+//   - `set-option -as terminal-features ,xterm*:extkeys` (tmux 3.2+):
+//     advertises the extkeys capability to panes whose outer TERM matches
+//     xterm* so the application knows it may emit/expect extended keys.
+//
+// The two extended-keys lines run under `if-shell -F` version guards so
+// they no-op cleanly on tmux < 3.2 instead of erroring out the whole
+// invocation; the xterm-keys baseline is version-safe everywhere.
+//
+// This must be applied via ChainArgs together with the NewSessionArgs it
+// guards, in a single tmux invocation, placed before NewSessionArgs so
+// the options are set before the pane forks its command — same rationale
+// as RemainOnExitArgs: a bare `set-option -g` between separate tmux
+// process invocations is not guaranteed to find a live server to talk to,
+// whereas chaining guarantees the option is in place before the
+// new-session's pane forks its foreground process.
+func ModifierKeysArgs() []string {
+	return []string{
+		"set-option", "-g", "xterm-keys", "on",
+		";",
+		"if-shell", "-F", extendedKeysVersionGuard,
+		"set-option -g extended-keys on",
+		";",
+		"if-shell", "-F", extendedKeysVersionGuard,
+		"set-option -as terminal-features ,xterm*:extkeys",
+	}
+}
+
 // ChainArgs joins multiple tmux command argument groups into the argument
 // list for a single tmux invocation, using tmux's own ";" command
 // separator so they run as one sequential command queue on the same
