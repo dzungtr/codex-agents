@@ -55,6 +55,37 @@ func newTestLauncher(t *testing.T, git GitRunner, tmux tmuxstatus.Runner, ids []
 	}, statePath
 }
 
+// assertModifierKeysChainedBeforeNewSession is the Bug-3 regression check:
+// the modifier-key decode options (xterm-keys, and the version-guarded
+// extended-keys) must appear in the session-creation invocation, before
+// new-session — without them tmux drops Shift+Enter and other modified
+// keys before they ever reach codex's pane.
+func assertModifierKeysChainedBeforeNewSession(t *testing.T, got []string) {
+	t.Helper()
+	joined := " " + strings.Join(got, " ") + " "
+	for _, opt := range []string{"xterm-keys on", "extended-keys on", "terminal-features"} {
+		if !strings.Contains(joined, " "+opt) {
+			t.Errorf("tmux call missing modifier-key setup %q, got %v", opt, got)
+		}
+	}
+	xtermIdx := -1
+	newSessionIdx := -1
+	for i, a := range got {
+		if a == "xterm-keys" && xtermIdx == -1 {
+			xtermIdx = i
+		}
+		if a == "new-session" && newSessionIdx == -1 {
+			newSessionIdx = i
+		}
+	}
+	if xtermIdx == -1 || newSessionIdx == -1 {
+		t.Fatalf("tmux call missing xterm-keys or new-session: %v", got)
+	}
+	if xtermIdx >= newSessionIdx {
+		t.Errorf("xterm-keys (arg %d) must be chained before new-session (arg %d): %v", xtermIdx, newSessionIdx, got)
+	}
+}
+
 func TestLaunch_GitRepo_CreatesWorktreeAndTmuxSessionAndState(t *testing.T) {
 	git := &fakeGitRunner{responses: map[string]fakeGitResponse{
 		"[rev-parse --show-toplevel]":                           {out: "/repo\n"},
@@ -89,10 +120,11 @@ func TestLaunch_GitRepo_CreatesWorktreeAndTmuxSessionAndState(t *testing.T) {
 	got := tmux.calls[0]
 	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", res.ThreadID, notifyhook.DefaultEventsPath(statePath), nil)
 	wantCodexArgs := NewThreadArgs(NewThreadSpec{Profile: "general-agentic", Task: "Fix auth hook", Notify: wantNotify})
-	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.NewSessionArgs(wantSession, wantDir, wantCodexArgs))
+	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(wantSession, wantDir, wantCodexArgs))
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("tmux call = %v, want %v", got, want)
 	}
+	assertModifierKeysChainedBeforeNewSession(t, got)
 
 	st, err := agentstate.Load(statePath)
 	if err != nil {
@@ -148,7 +180,7 @@ func TestLaunch_ChainsExistingNotifyCommandFromProfileConfig(t *testing.T) {
 
 	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", res.ThreadID, notifyhook.DefaultEventsPath(statePath), []string{"/usr/bin/terminal-notifier", "-title", "codex"})
 	wantCodexArgs := NewThreadArgs(NewThreadSpec{Profile: "general-agentic", Task: "do a thing", Notify: wantNotify})
-	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.NewSessionArgs(tmuxstatus.SessionName(res.ThreadID), "/plain", wantCodexArgs))
+	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(tmuxstatus.SessionName(res.ThreadID), "/plain", wantCodexArgs))
 	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {
 		t.Errorf("tmux call = %v, want %v (expected the profile's existing notify command chained in)", tmux.calls[0], want)
 	}
@@ -235,10 +267,11 @@ func TestResume_ReusesThreadIDAndUpdatesState(t *testing.T) {
 	if len(tmux.calls) != 1 {
 		t.Fatalf("expected one tmux call, got %v", tmux.calls)
 	}
-	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.NewSessionArgs(wantSession, "/repo/.worktrees/fix-auth-hook", ResumeArgs("existing-thread-id", "general-agentic")))
+	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(wantSession, "/repo/.worktrees/fix-auth-hook", ResumeArgs("existing-thread-id", "general-agentic")))
 	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {
 		t.Errorf("tmux call = %v, want %v", tmux.calls[0], want)
 	}
+	assertModifierKeysChainedBeforeNewSession(t, tmux.calls[0])
 
 	st, err := agentstate.Load(statePath)
 	if err != nil {
@@ -365,7 +398,7 @@ func TestResume_PreservesKnownProfileFromPriorState(t *testing.T) {
 		t.Errorf("Profile = %q, want preserved 'review'", res.Profile)
 	}
 
-	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.NewSessionArgs(tmuxstatus.SessionName("t1"), "/repo/.worktrees/t1", ResumeArgs("t1", "review")))
+	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(tmuxstatus.SessionName("t1"), "/repo/.worktrees/t1", ResumeArgs("t1", "review")))
 	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {
 		t.Errorf("tmux call = %v, want %v (fell back to prior state's profile)", tmux.calls[0], want)
 	}
@@ -386,7 +419,7 @@ func TestResume_CallerProfileOverridesPriorState(t *testing.T) {
 		t.Errorf("Profile = %q, want state's existing 'review' preserved", res.Profile)
 	}
 
-	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.NewSessionArgs(tmuxstatus.SessionName("t1"), "/repo/.worktrees/t1", ResumeArgs("t1", "general-agentic")))
+	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(tmuxstatus.SessionName("t1"), "/repo/.worktrees/t1", ResumeArgs("t1", "general-agentic")))
 	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {
 		t.Errorf("tmux call = %v, want %v (caller-supplied profile used for -p)", tmux.calls[0], want)
 	}

@@ -6,7 +6,7 @@
 // (attach an alive thread, or `codex resume` a closed one). Slice #4 adds
 // the notify-hook subcommand (see runNotifyHook) that launched threads
 // invoke via `-c notify=[...]` to report turn-ended events, and status
-// derivation now also consults those events (loadTurnEndedByThread) rather
+// derivation now also consults those events (turnEndedByThread) rather
 // than tmux liveness alone.
 package main
 
@@ -217,8 +217,13 @@ func loadRows(codexHome, statePath string) ([]ui.Row, error) {
 	}
 	liveSet := tmuxstatus.NewLiveSet(live)
 
-	turnEnded := loadTurnEndedByThread(statePath)
-	hidden := loadHiddenByThread(statePath)
+	// One agentstate read feeds all three per-thread lookups (hidden,
+	// turnEnded, and the profile fallback below); loadAgentState degrades
+	// to an empty State on failure, matching the previous per-helper
+	// degrade posture.
+	st := loadAgentState(statePath)
+	turnEnded := turnEndedByThread(st)
+	hidden := hiddenByThread(st)
 
 	rows := make([]ui.Row, 0, len(result.Threads))
 	for _, t := range result.Threads {
@@ -235,21 +240,47 @@ func loadRows(codexHome, statePath string) ([]ui.Row, error) {
 			Status: tmuxstatus.StatusFor(t.ID, liveSet, turnEnded[t.ID]),
 		})
 	}
+	applyProfileFallback(rows, st)
 	return rows, nil
 }
 
-// loadHiddenByThread reads agentstate's state.json and reports, per thread
-// ID, whether it has been archived from the cockpit's own bookkeeping
-// (agentstate.Entry.Hidden, set by the Archive (`a`) action — see
-// archiveAction). A load failure degrades to "nothing hidden" rather than
-// erroring the whole list, matching loadTurnEndedByThread's degrade
-// posture.
-func loadHiddenByThread(statePath string) map[string]bool {
+// loadAgentState reads agentstate's state.json. A load
+// failure degrades to an empty State rather than erroring the whole list:
+// per the PRD's "hook unavailable -> degrade to open/closed" contract, a
+// corrupt or unreadable state.json must not stop the cockpit from showing
+// plain tmux-liveness status (and archived threads simply reappear).
+func loadAgentState(statePath string) agentstate.State {
 	st, err := agentstate.Load(statePath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "codex-agents: load state (degrading to no hidden threads):", err)
-		return map[string]bool{}
+		fmt.Fprintln(os.Stderr, "codex-agents: load state (degrading to tmux-liveness-only status):", err)
+		return agentstate.State{Threads: map[string]agentstate.Entry{}}
 	}
+	return st
+}
+
+// applyProfileFallback fills each row's empty Thread.Profile from the
+// cockpit's own state.json entry for that thread ID (issue #25, Bug 2).
+// codexstate derives Profile from the rollout jsonl's session_meta, which
+// doesn't always record one (launch predates it, or parsing missed it);
+// attachAction passes row.Thread.Profile straight to Launcher.Resume, so
+// an empty profile here means `codex resume <id>` without `-p` and the
+// resumed session runs on the base config.toml model instead of the
+// launch profile's. A non-empty codexstate profile is never clobbered.
+func applyProfileFallback(rows []ui.Row, st agentstate.State) {
+	for i := range rows {
+		if rows[i].Thread.Profile != "" {
+			continue
+		}
+		if entry, ok := st.Threads[rows[i].Thread.ID]; ok {
+			rows[i].Thread.Profile = entry.Profile
+		}
+	}
+}
+
+// hiddenByThread reports, per thread ID, whether it has been archived from
+// the cockpit's own bookkeeping (agentstate.Entry.Hidden, set by the Archive
+// (`a`) action — see archiveAction).
+func hiddenByThread(st agentstate.State) map[string]bool {
 	hidden := make(map[string]bool, len(st.Threads))
 	for id, entry := range st.Threads {
 		hidden[id] = entry.Hidden
@@ -257,20 +288,10 @@ func loadHiddenByThread(statePath string) map[string]bool {
 	return hidden
 }
 
-// loadTurnEndedByThread reads agentstate's state.json and reports, per
-// thread ID, whether its LastTurnEvent field is populated (i.e. the
-// notify-hook wrapper has recorded at least one turn-ended event for it —
-// internal/notifyhook is the producer). A load failure degrades to "no
-// events known" (every entry false) rather than erroring the whole list:
-// per the PRD's "hook unavailable -> degrade to open/closed" contract, a
-// corrupt or unreadable state.json must not stop the cockpit from showing
-// plain tmux-liveness status.
-func loadTurnEndedByThread(statePath string) map[string]bool {
-	st, err := agentstate.Load(statePath)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "codex-agents: load state (degrading to tmux-liveness-only status):", err)
-		return map[string]bool{}
-	}
+// turnEndedByThread reports, per thread ID, whether its LastTurnEvent
+// field is populated (i.e. the notify-hook wrapper has recorded at least
+// one turn-ended event for it — internal/notifyhook is the producer).
+func turnEndedByThread(st agentstate.State) map[string]bool {
 	turnEnded := make(map[string]bool, len(st.Threads))
 	for id, entry := range st.Threads {
 		turnEnded[id] = entry.LastTurnEvent != ""
@@ -409,7 +430,7 @@ func checkLivenessAction(statePath string) func(threadID string) tea.Cmd {
 				// disrupt the freshly-launched row's optimistic status.
 				return nil
 			}
-			turnEnded := loadTurnEndedByThread(statePath)
+			turnEnded := turnEndedByThread(loadAgentState(statePath))
 			status := tmuxstatus.StatusFor(threadID, tmuxstatus.NewLiveSet(live), turnEnded[threadID])
 			return ui.ThreadLivenessMsg{ThreadID: threadID, Status: status}
 		}

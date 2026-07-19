@@ -605,17 +605,26 @@ func TestUpdate_ArchiveDoneMsg_RemovesRowAndShowsNote(t *testing.T) {
 	}
 }
 
-func TestUpdate_RowsRefreshedMsg_ReplacesRows(t *testing.T) {
+// TestUpdate_RowsRefreshedMsg_MergesRows covers the refresh side of the
+// issue #25 Bug 1 merge: rows present in the refreshed set land in the
+// model (and rows present in both take the refreshed version — see
+// TestUpdate_RowsRefreshedMsg_RefreshedRowsWin in refresh_merge_test.go).
+// Existing rows absent from the refreshed set are no longer dropped
+// wholesale: they are kept unless archived, which is what protects a
+// just-launched thread codex hasn't persisted yet.
+func TestUpdate_RowsRefreshedMsg_MergesRows(t *testing.T) {
 	m := newFixtureModel()
 	newRows := []Row{{Thread: codexstate.Thread{ID: "only1", Title: "Only thread"}, Status: tmuxstatus.StatusClosed}}
 	updated, _ := m.Update(RowsRefreshedMsg{Rows: newRows})
 	m = updated.(Model)
 	view := m.View()
 	if !strings.Contains(view, "Only thread") {
-		t.Fatalf("expected replaced rows in view, got:\n%s", view)
+		t.Fatalf("expected refreshed rows in view, got:\n%s", view)
 	}
-	if strings.Contains(view, "Add dark mode") {
-		t.Fatalf("expected old rows to be gone after refresh, got:\n%s", view)
+	// The fixture rows are neither in the refreshed set nor archived, so
+	// the merge keeps them alongside the new row.
+	if !strings.Contains(view, "Add dark mode") || !strings.Contains(view, "Refactor drainer") || !strings.Contains(view, "Fix auth hook") {
+		t.Fatalf("expected existing rows to survive the merge, got:\n%s", view)
 	}
 }
 

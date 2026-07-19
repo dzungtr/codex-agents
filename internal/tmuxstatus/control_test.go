@@ -134,6 +134,26 @@ func TestWheelDownArgs(t *testing.T) {
 	}
 }
 
+func TestModifierKeysArgs(t *testing.T) {
+	// Baseline xterm-keys decode plus, where the tmux build is new
+	// enough to have the option, extended-keys — the extended-keys
+	// lines are guarded by `if-shell` version checks so the same
+	// command queue stays valid on tmux < 3.2.
+	got := ModifierKeysArgs()
+	want := []string{
+		"set-option", "-g", "xterm-keys", "on",
+		";",
+		"if-shell", "-F", "#{m/r:^(3\\.[2-9]|[4-9]\\.|[1-9][0-9]+\\.),#{version}}",
+		"set-option -g extended-keys on",
+		";",
+		"if-shell", "-F", "#{m/r:^(3\\.[2-9]|[4-9]\\.|[1-9][0-9]+\\.),#{version}}",
+		"set-option -as terminal-features ,xterm*:extkeys",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ModifierKeysArgs() = %v, want %v", got, want)
+	}
+}
+
 func TestChainArgs(t *testing.T) {
 	got := ChainArgs(
 		RemainOnExitArgs(),
