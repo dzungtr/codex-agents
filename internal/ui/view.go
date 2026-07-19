@@ -33,10 +33,15 @@ var (
 	// `.session-row.is-selected { background: var(--accent-soft) }` — a
 	// soft accent tint over the whole row, not the `›` cursor glyph alone
 	// (which is kept too, since it still helps in a colorless terminal).
-	// Color 237 is a neutral elevated-surface gray, standing in for
-	// `--accent-soft`'s subtle ~14% tint — color 24 (a heavy saturated navy)
-	// read as a solid block rather than a soft wash (design drift gap 2).
-	selectedStyle = lipgloss.NewStyle().Background(lipgloss.Color("237"))
+	// #2e3a48 is a dark cyan-leaning blue-gray that approximates what the
+	// style contract's `--accent-soft: oklch(80% 0.1 200 / 0.14)` would
+	// actually render as when blended over the surface background, while
+	// staying visible on real terminals — the previous color 237 (a neutral
+	// #3a3a3a gray) was indistinguishable from the dark surface on most
+	// terminals, so the highlight effectively disappeared; the earlier
+	// color 24 (a heavy saturated navy) read as a solid block rather than
+	// a soft wash (design drift gap 2).
+	selectedStyle = lipgloss.NewStyle().Background(lipgloss.Color("#2e3a48"))
 	detailStyle   = lipgloss.NewStyle().Faint(true)
 	// badgeStyle renders the per-row model/profile badges: a muted color
 	// distinct from detailStyle's Faint so they read as a separate visual
