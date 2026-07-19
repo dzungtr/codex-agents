@@ -46,6 +46,25 @@ type Workspace struct {
 	InPlace bool
 }
 
+// WorkspaceMode selects where a freshly launched thread runs (ADR 0003
+// decision 6). WorktreeMode (the default, behaviour unchanged from issue
+// #29) creates a fresh git worktree per thread; InPlaceMode runs in the
+// caller's cwd with no worktree — for read-only delegation where a
+// throwaway checkout is pure overhead and risks stale reads. The zero
+// value is WorktreeMode so an unset LaunchRequest behaves exactly as
+// before #30.
+type WorkspaceMode int
+
+const (
+	// WorkspaceWorktree creates a fresh worktree at
+	// <repo-root>/.worktrees/<branch> (ADR 0001 decision 4). This is the
+	// default for both the cockpit launch path and `cdxa spawn`.
+	WorkspaceWorktree WorkspaceMode = iota
+	// WorkspaceInPlace runs in the caller's cwd with no worktree and no
+	// new branch, even inside a git repo. Added by issue #30.
+	WorkspaceInPlace
+)
+
 // RepoRoot runs `git rev-parse --show-toplevel` in startDir. ok is false
 // when startDir isn't inside a git working tree (or git isn't available),
 // which the caller treats as "run in place" rather than an error.
@@ -89,13 +108,22 @@ func CreateWorktree(run GitRunner, repoRoot, branch string) (string, error) {
 
 // ResolveWorkspace decides where a newly launched thread should run:
 //
-//   - If startDir is inside a git repo, a new worktree is created at
+//   - If mode is WorkspaceInPlace, the thread runs in startDir itself with
+//     no worktree and no new branch, even when startDir is inside a git
+//     repo (issue #30). WorkDir is startDir, InPlace is true, Branch is
+//     empty.
+//   - If startDir is inside a git repo (and mode is WorkspaceWorktree, the
+//     default/zero value), a new worktree is created at
 //     <repo-root>/.worktrees/<slug>, where slug is derived from title and
 //     suffixed on collision (an existing branch of that name, or an
 //     existing directory at that path).
-//   - Otherwise ("non-git startup dir"), the thread runs in place: WorkDir
-//     is startDir itself, InPlace is true, Branch is empty.
-func ResolveWorkspace(run GitRunner, startDir, title string) (Workspace, error) {
+//   - Otherwise ("non-git startup dir"), the thread runs in place
+//     regardless of mode: WorkDir is startDir itself, InPlace is true,
+//     Branch is empty.
+func ResolveWorkspace(run GitRunner, startDir, title string, mode WorkspaceMode) (Workspace, error) {
+	if mode == WorkspaceInPlace {
+		return Workspace{WorkDir: startDir, InPlace: true}, nil
+	}
 	root, ok := RepoRoot(run, startDir)
 	if !ok {
 		return Workspace{WorkDir: startDir, InPlace: true}, nil

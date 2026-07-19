@@ -27,6 +27,53 @@ import (
 // default (ADR 0001 decision 5).
 const defaultProfile = "general-agentic"
 
+// WorkspaceMode selects where a freshly spawned subthread runs (ADR 0003
+// decision 6). It mirrors codexlaunch.WorkspaceMode but lives in this
+// package so internal/subthread's Launcher interface does not import
+// internal/codexlaunch — the adapter in cmd/cdxa translates between the
+// two. The zero value is WorkspaceWorktree, preserving the pre-#30
+// default (issue #29 behaviour) when the caller omits the flag.
+type WorkspaceMode int
+
+const (
+	// WorkspaceWorktree creates a fresh git worktree per subthread
+	// (ADR 0001 decision 4). This is the default for `cdxa spawn`.
+	WorkspaceWorktree WorkspaceMode = iota
+	// WorkspaceInPlace runs the subthread in the parent's cwd with no
+	// worktree and no new branch — for read-only delegation. Added by
+	// issue #30.
+	WorkspaceInPlace
+)
+
+// String renders a WorkspaceMode for the human-readable forms the --workspace
+// flag accepts (and the JSON error message an invalid value produces). It is
+// also the inverse of ParseWorkspaceMode.
+func (m WorkspaceMode) String() string {
+	switch m {
+	case WorkspaceInPlace:
+		return "inplace"
+	case WorkspaceWorktree:
+		return "worktree"
+	default:
+		return "unknown"
+	}
+}
+
+// ParseWorkspaceMode maps a --workspace flag value to a WorkspaceMode. An
+// unrecognized value yields ok=false; the caller (cmd/cdxa) reports it as a
+// JSON error object and exit 1 (ADR 0003 decision 2). The empty string maps
+// to WorkspaceWorktree so an omitted flag is the same as the explicit default.
+func ParseWorkspaceMode(s string) (m WorkspaceMode, ok bool) {
+	switch s {
+	case "", "worktree":
+		return WorkspaceWorktree, true
+	case "inplace":
+		return WorkspaceInPlace, true
+	default:
+		return WorkspaceWorktree, false
+	}
+}
+
 // DefaultPollInterval is the delay between registration polls when a
 // Spawner's PollInterval is zero. Bounded to a value that catches a
 // registration within a few polls of codex's own write latency without
@@ -55,7 +102,7 @@ var ErrRegistrationTimeout = errors.New("subthread: thread did not register in c
 // the launch-then-poll loop can be exercised without a real tmux server or
 // git repo.
 type Launcher interface {
-	HeadlessLaunch(task, profile string) (string, error)
+	HeadlessLaunch(task, profile string, mode WorkspaceMode) (string, error)
 }
 
 // Registrar reports whether codex already knows about a thread id (i.e. it
@@ -101,17 +148,22 @@ func (s *Spawner) sleep() func(time.Duration) {
 	return time.Sleep
 }
 
-// Spawn launches a new codex thread running task under profile, then polls
-// codex's sqlite until that thread registers (bounded by RegistrationWait),
-// returning codex's own thread id. An empty profile defaults to
-// general-agentic (issue #29).
+// Spawn launches a new codex thread running task under profile in the
+// workspace selected by mode, then polls codex's sqlite until that thread
+// registers (bounded by RegistrationWait), returning codex's own thread id.
+// An empty profile defaults to general-agentic (issue #29). A zero-value
+// mode (WorkspaceWorktree) preserves the pre-#30 default; WorkspaceInPlace
+// (issue #30, ADR 0003 decision 6) launches in the parent's cwd with no
+// worktree.
 //
-// The launch is the cockpit's standard worktree-per-thread launch (ADR 0001
-// decision 4): a fresh worktree at <repo-root>/.worktrees/<slug>, a
-// detached tmux session named cxa-<prefix>, the notify-hook wrapper
-// chained. The block until registration is the contract from ADR 0003
-// decision 4 — the returned id is immediately resolvable via codex's own
-// data, so cdxa output (#28) and the cockpit list see the same thread.
+// The default launch is the cockpit's standard worktree-per-thread launch
+// (ADR 0001 decision 4): a fresh worktree at <repo-root>/.worktrees/<slug>,
+// a detached tmux session named cxa-<prefix>, the notify-hook wrapper
+// chained. In-place mode skips the worktree/branch path and launches with
+// cwd = the caller's cwd. The block until registration is the contract
+// from ADR 0003 decision 4 — the returned id is immediately resolvable via
+// codex's own data, so cdxa output (#28) and the cockpit list see the same
+// thread.
 //
 // Failure modes:
 //   - launch error (tmux refused to start the session, codex binary
@@ -120,12 +172,12 @@ func (s *Spawner) sleep() func(time.Duration) {
 //     registrar error preceded the final timeout check).
 //   - registrar error: propagated; Spawn does not retry past a genuine
 //     sqlite/jsonl read failure.
-func (s *Spawner) Spawn(task, profile string) (string, error) {
+func (s *Spawner) Spawn(task, profile string, mode WorkspaceMode) (string, error) {
 	if profile == "" {
 		profile = defaultProfile
 	}
 
-	threadID, err := s.Launch.HeadlessLaunch(task, profile)
+	threadID, err := s.Launch.HeadlessLaunch(task, profile, mode)
 	if err != nil {
 		return "", fmt.Errorf("subthread: launch: %w", err)
 	}

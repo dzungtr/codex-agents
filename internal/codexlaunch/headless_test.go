@@ -59,3 +59,35 @@ func TestHeadlessLaunch_TmuxFailurePropagates(t *testing.T) {
 }
 
 var errHeadlessTmuxFail = strErr("tmux boom")
+
+func TestHeadlessLaunch_InPlaceModeOnGitDirRunsInCallerCwd(t *testing.T) {
+	// A git fake: rev-parse reports a real toplevel, so in-place mode
+	// must override the default worktree-per-thread path.
+	git := GitRunnerFunc(func(dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "rev-parse" && len(args) > 1 && args[1] == "--show-toplevel" {
+			return "/repo\n", nil
+		}
+		return "", errHeadlessFakeGitNotARepo
+	})
+	tmux := &fakeTmuxRunner{}
+	l, _ := newTestLauncher(t, git, tmux, []string{"abcd1234efgh5678"})
+
+	res, err := l.HeadlessLaunch(LaunchRequest{
+		StartDir:      "/repo/sub",
+		Task:          "explore the graph",
+		Profile:       "general-agentic",
+		WorkspaceMode: WorkspaceInPlace,
+	})
+	if err != nil {
+		t.Fatalf("HeadlessLaunch: %v", err)
+	}
+	if !res.InPlace {
+		t.Errorf("InPlace = %v, want true (in-place mode on a git dir)", res.InPlace)
+	}
+	if res.WorktreePath != "/repo/sub" {
+		t.Errorf("WorktreePath = %q, want /repo/sub", res.WorktreePath)
+	}
+	if res.Branch != "" {
+		t.Errorf("Branch = %q, want empty for in-place run", res.Branch)
+	}
+}

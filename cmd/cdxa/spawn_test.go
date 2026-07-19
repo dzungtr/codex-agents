@@ -17,7 +17,7 @@ type fakeSubthreadLauncher struct {
 	err     error
 }
 
-func (f *fakeSubthreadLauncher) HeadlessLaunch(task, profile string) (string, error) {
+func (f *fakeSubthreadLauncher) HeadlessLaunch(task, profile string, _ subthread.WorkspaceMode) (string, error) {
 	f.task = task
 	f.profile = profile
 	return f.id, f.err
@@ -189,5 +189,121 @@ func TestNewSpawner_ProductionWiring(t *testing.T) {
 	}
 	if s.Registered == nil {
 		t.Error("expected Registered to be wired")
+	}
+}
+
+// fakeSubthreadLauncherWithMode records the workspace mode passed by
+// runSpawn, so the inplace/worktree/invalid tests can assert the mode
+// reaches the launcher without depending on a real codexlaunch.Launcher.
+type fakeSubthreadLauncherWithMode struct {
+	task    string
+	profile string
+	mode    subthread.WorkspaceMode
+	id      string
+	err     error
+}
+
+func (f *fakeSubthreadLauncherWithMode) HeadlessLaunch(task, profile string, mode subthread.WorkspaceMode) (string, error) {
+	f.task = task
+	f.profile = profile
+	f.mode = mode
+	return f.id, f.err
+}
+
+func fakeSpawnerDepsWithMode(t *testing.T, launcher *fakeSubthreadLauncherWithMode, registrar *fakeSubthreadRegistrar) deps {
+	t.Helper()
+	return deps{
+		codexHome: "/codex",
+		statePath: "/state.json",
+		spawner: func(_, _, _ string) *subthread.Spawner {
+			return &subthread.Spawner{
+				Launch:           launcher,
+				Registered:       registrar,
+				PollInterval:     time.Millisecond,
+				RegistrationWait: time.Second,
+				Sleep:            func(time.Duration) {},
+			}
+		},
+	}
+}
+
+func TestRunSpawn_WorkspaceInPlace_PassesInPlaceMode(t *testing.T) {
+	launcher := &fakeSubthreadLauncherWithMode{id: "spawned-inplace"}
+	registrar := &fakeSubthreadRegistrar{registered: true}
+	d := fakeSpawnerDepsWithMode(t, launcher, registrar)
+
+	out := captureStdout(t, func() {
+		code, err := runSpawn([]string{"explore", "--workspace", "inplace"}, d)
+		if err != nil || code != 0 {
+			t.Fatalf("expected exit 0, got code=%d err=%v", code, err)
+		}
+	})
+	var got struct {
+		ThreadID string `json:"thread_id"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("parse out %q: %v", out, err)
+	}
+	if got.ThreadID != "spawned-inplace" {
+		t.Errorf("thread_id = %q, want spawned-inplace", got.ThreadID)
+	}
+	if launcher.mode != subthread.WorkspaceInPlace {
+		t.Errorf("mode = %v, want WorkspaceInPlace", launcher.mode)
+	}
+}
+
+func TestRunSpawn_WorkspaceWorktree_PassesWorktreeMode(t *testing.T) {
+	launcher := &fakeSubthreadLauncherWithMode{id: "spawned-wt"}
+	registrar := &fakeSubthreadRegistrar{registered: true}
+	d := fakeSpawnerDepsWithMode(t, launcher, registrar)
+
+	captureStdout(t, func() {
+		if code, err := runSpawn([]string{"explore", "--workspace", "worktree"}, d); err != nil || code != 0 {
+			t.Fatalf("expected exit 0, got code=%d err=%v", code, err)
+		}
+	})
+	if launcher.mode != subthread.WorkspaceWorktree {
+		t.Errorf("mode = %v, want WorkspaceWorktree", launcher.mode)
+	}
+}
+
+func TestRunSpawn_WorkspaceOmitted_DefaultsToWorktree(t *testing.T) {
+	launcher := &fakeSubthreadLauncherWithMode{id: "spawned-default"}
+	registrar := &fakeSubthreadRegistrar{registered: true}
+	d := fakeSpawnerDepsWithMode(t, launcher, registrar)
+
+	captureStdout(t, func() {
+		if code, err := runSpawn([]string{"explore"}, d); err != nil || code != 0 {
+			t.Fatalf("expected exit 0, got code=%d err=%v", code, err)
+		}
+	})
+	if launcher.mode != subthread.WorkspaceWorktree {
+		t.Errorf("mode = %v, want WorkspaceWorktree (the default)", launcher.mode)
+	}
+}
+
+func TestRunSpawn_InvalidWorkspace_JSONErrorExit1(t *testing.T) {
+	launcher := &fakeSubthreadLauncherWithMode{id: "should-not-launch"}
+	registrar := &fakeSubthreadRegistrar{registered: true}
+	d := fakeSpawnerDepsWithMode(t, launcher, registrar)
+
+	out := captureStdout(t, func() {
+		code, err := runSpawn([]string{"explore", "--workspace", "bogus"}, d)
+		printError(err)
+		if code != exitOperErr {
+			t.Errorf("exit code = %d, want %d", code, exitOperErr)
+		}
+	})
+	var got struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("parse out %q: %v", out, err)
+	}
+	if !strings.Contains(got.Error, "workspace") {
+		t.Errorf("error = %q, want it to mention --workspace", got.Error)
+	}
+	if launcher.task != "" {
+		t.Errorf("launcher should not have been called for an invalid --workspace value; got task=%q", launcher.task)
 	}
 }

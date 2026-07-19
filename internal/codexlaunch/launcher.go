@@ -169,6 +169,10 @@ type LaunchRequest struct {
 	Task     string
 	Profile  string
 	Model    string
+	// WorkspaceMode selects where the launched thread runs (issue #30,
+	// ADR 0003 decision 6). The zero value (WorkspaceWorktree) preserves
+	// the pre-#30 behaviour exactly: a fresh worktree per thread.
+	WorkspaceMode WorkspaceMode
 }
 
 // LaunchResult is what the caller (the composer's submit handler) needs to
@@ -198,7 +202,7 @@ func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 	// path is safe end-to-end.
 	profile := req.Profile
 
-	ws, err := ResolveWorkspace(l.Git, req.StartDir, req.Task)
+	ws, err := ResolveWorkspace(l.Git, req.StartDir, req.Task, req.WorkspaceMode)
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("codexlaunch: resolve workspace: %w", err)
 	}

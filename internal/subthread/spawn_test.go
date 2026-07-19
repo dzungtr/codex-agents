@@ -12,16 +12,17 @@ type fakeLauncher struct {
 	results []fakeLaunchResult
 	calls   []fakeLaunchCall
 }
-type fakeLaunchResult struct {
-	id  string
-	err error
-}
+
 type fakeLaunchCall struct {
 	Task    string
 	Profile string
 }
+type fakeLaunchResult struct {
+	id  string
+	err error
+}
 
-func (f *fakeLauncher) HeadlessLaunch(task, profile string) (string, error) {
+func (f *fakeLauncher) HeadlessLaunch(task, profile string, _ WorkspaceMode) (string, error) {
 	f.calls = append(f.calls, fakeLaunchCall{Task: task, Profile: profile})
 	if len(f.calls) > len(f.results) {
 		return "", errors.New("fakeLauncher: scripted results exhausted")
@@ -65,7 +66,7 @@ func TestSpawn_RegisteredOnFirstPoll_ReturnsThreadID(t *testing.T) {
 	registrar := &fakeRegistrar{responses: []bool{true}}
 	s := newSpawnerForTest(launcher, registrar)
 
-	id, err := s.Spawn("explore the graph", "general-agentic")
+	id, err := s.Spawn("explore the graph", "general-agentic", WorkspaceWorktree)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -88,7 +89,7 @@ func TestSpawn_RegisteredAfterSeveralPolls_ReturnsThreadID(t *testing.T) {
 	registrar := &fakeRegistrar{responses: []bool{false, false, true}}
 	s := newSpawnerForTest(launcher, registrar)
 
-	id, err := s.Spawn("do the thing", "general-agentic")
+	id, err := s.Spawn("do the thing", "general-agentic", WorkspaceWorktree)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -106,7 +107,7 @@ func TestSpawn_LaunchFails_ReturnsWrappedError(t *testing.T) {
 	registrar := &fakeRegistrar{}
 	s := newSpawnerForTest(launcher, registrar)
 
-	_, err := s.Spawn("task", "general-agentic")
+	_, err := s.Spawn("task", "general-agentic", WorkspaceWorktree)
 	if err == nil {
 		t.Fatalf("expected launch failure to surface, got nil")
 	}
@@ -126,7 +127,7 @@ func TestSpawn_RegistrationTimeout_ReturnsTimeoutError(t *testing.T) {
 	s.RegistrationWait = 10 * time.Millisecond
 	s.PollInterval = 2 * time.Millisecond
 
-	_, err := s.Spawn("task", "general-agentic")
+	_, err := s.Spawn("task", "general-agentic", WorkspaceWorktree)
 	if err == nil {
 		t.Fatalf("expected timeout error, got nil")
 	}
@@ -140,7 +141,7 @@ func TestSpawn_EmptyProfileDefaultsToGeneralAgentic(t *testing.T) {
 	registrar := &fakeRegistrar{responses: []bool{true}}
 	s := newSpawnerForTest(launcher, registrar)
 
-	if _, err := s.Spawn("task", ""); err != nil {
+	if _, err := s.Spawn("task", "", WorkspaceWorktree); err != nil {
 		t.Fatalf("Spawn with empty profile: %v", err)
 	}
 	if launcher.calls[0].Profile != "general-agentic" {
@@ -154,7 +155,7 @@ func TestSpawn_RegistrarError_Propagates(t *testing.T) {
 	registrar := &errorRegistrar{err: registrarErr}
 	s := newSpawnerForTest(launcher, registrar)
 
-	_, err := s.Spawn("task", "general-agentic")
+	_, err := s.Spawn("task", "general-agentic", WorkspaceWorktree)
 	if err == nil {
 		t.Fatalf("expected registrar error to surface, got nil")
 	}
@@ -166,3 +167,61 @@ func TestSpawn_RegistrarError_Propagates(t *testing.T) {
 type errorRegistrar struct{ err error }
 
 func (e *errorRegistrar) ThreadRegistered(string) (bool, error) { return false, e.err }
+
+func TestSpawn_PassesInPlaceModeToLauncher(t *testing.T) {
+	launcher := &fakeLauncherWithMode{results: []fakeLaunchResult{{id: "thread-1"}}}
+	registrar := &fakeRegistrar{responses: []bool{true}}
+	s := &Spawner{
+		Launch:           launcher,
+		Registered:       registrar,
+		PollInterval:     5 * time.Millisecond,
+		RegistrationWait: 200 * time.Millisecond,
+		Sleep:            func(time.Duration) {},
+	}
+	if _, err := s.Spawn("task", "general-agentic", WorkspaceInPlace); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if len(launcher.calls) != 1 {
+		t.Fatalf("expected one launch call, got %d", len(launcher.calls))
+	}
+	if launcher.calls[0].Mode != WorkspaceInPlace {
+		t.Errorf("mode = %v, want WorkspaceInPlace", launcher.calls[0].Mode)
+	}
+}
+
+func TestSpawn_PassesWorktreeModeToLauncher(t *testing.T) {
+	launcher := &fakeLauncherWithMode{results: []fakeLaunchResult{{id: "thread-1"}}}
+	registrar := &fakeRegistrar{responses: []bool{true}}
+	s := &Spawner{
+		Launch:           launcher,
+		Registered:       registrar,
+		PollInterval:     5 * time.Millisecond,
+		RegistrationWait: 200 * time.Millisecond,
+		Sleep:            func(time.Duration) {},
+	}
+	if _, err := s.Spawn("task", "general-agentic", WorkspaceWorktree); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if launcher.calls[0].Mode != WorkspaceWorktree {
+		t.Errorf("mode = %v, want WorkspaceWorktree", launcher.calls[0].Mode)
+	}
+}
+
+type fakeLauncherWithMode struct {
+	results []fakeLaunchResult
+	calls   []fakeLaunchWithModeCall
+}
+type fakeLaunchWithModeCall struct {
+	Task    string
+	Profile string
+	Mode    WorkspaceMode
+}
+
+func (f *fakeLauncherWithMode) HeadlessLaunch(task, profile string, mode WorkspaceMode) (string, error) {
+	f.calls = append(f.calls, fakeLaunchWithModeCall{Task: task, Profile: profile, Mode: mode})
+	if len(f.calls) > len(f.results) {
+		return "", errors.New("fakeLauncherWithMode: scripted results exhausted")
+	}
+	r := f.results[len(f.calls)-1]
+	return r.id, r.err
+}
