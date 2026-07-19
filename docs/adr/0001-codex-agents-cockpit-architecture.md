@@ -133,14 +133,46 @@ merged — see #2–#6)._
   measured during actual daily use of codex-agents (e.g. wall-clock time from launch to a
   usable attached session, across a few representative repo sizes).
  
- **Thread identity = codex's id (decision 2, ratified by #47/#48)**: _stub — to be filled
- by the results-promotion step after the code PR for #49 merges._ Promote here:
-   - whether the blocking-poll launch path eliminated the duplicate-row repro from #47
-     (regression test in `internal/ui` is the fixture-level evidence; the human-run
-     attach-then-detach check is the production confirmation);
-   - the observed launch-to-registered latency against a real codex sqlite (the 30s
-     `DefaultRegistrationWait` bound is asserted, but the typical wait was never observed
-     against a real thread — same gap ADR 0003 flags);
-   - whether re-keying `agentstate` and `events.jsonl` by codex's id made
-     `turnEndedByThread`/`hiddenByThread` lookups in `loadRows` land on codex's rows
-     (i.e. working→waiting transitions now fire correctly for cockpit-launched threads).
+- **Thread identity = codex's id (decision 2, ratified by #47/#48)**: filled from the merged
+  code PR #51 (squash commit `2b9ff1e`, closing slice #49). The blocking-poll launch path is
+  in place: `Launcher.Launch` (`internal/codexlaunch/launcher.go`) polls
+  `codexstate.ThreadByCWD` via the `cwdRegistrar`/`Registrar` seam until codex has written
+  the thread, then returns codex's id as `LaunchResult.ThreadID` — the cockpit mints no UUID
+  of its own for thread identity. The tmux session is created under a cockpit-handle-derived
+  name and renamed to `cxa-<codexID>` once codex registers, so downstream consumers that
+  derive the session name from the thread id via `tmuxstatus.SessionName` keep resolving to
+  the actual session.
+  - **Duplicate-row repro (#47) — eliminated by construction.** The optimistic launch row's
+    `Thread.ID` is codex's id (the same id `loadRows` later returns from codex's sqlite), so
+    `RowsRefreshedMsg`'s merge sees one id, not two, and keeps a single row. Pinned by
+    `TestUpdate_RowsRefreshedMsg_LaunchedRowKeyedByCodexIDIsNotDuplicated` in
+    `internal/ui/refresh_merge_test.go` (optimistic row keyed by codex id + a refresh
+    carrying the same id → exactly one row survives). The pre-#48 attach-then-detach
+    duplicate is gone at the model level.
+  - **`agentstate` and `events.jsonl` keyed by codex's id.** `Launch` calls
+    `agentstate.Upsert(statePath, threadID, entry)` with codex's id; `runNotifyHook`
+    (`cmd/codex-agents/main.go`) resolves the notify-hook wrapper's identity positional
+    (the original, pre-rename tmux session name) back to codex's id via
+    `agentstate.FindThreadIDBySession` before invoking `notifyhook.Run`. So `events.jsonl`
+    and `agentstate.LastTurnEvent` are keyed by codex's id, and `turnEndedByThread`/
+    `hiddenByThread` lookups in `loadRows` land on codex's rows — the working→waiting
+    transition wiring is correct for cockpit-launched threads. On resolution failure
+    `runNotifyHook` degrades to the handle as-is, preserving pre-#48 behaviour rather than
+    failing codex's turn-completion flow.
+  - **`cdxa spawn`'s latent production timeout — fixed for free.** `Spawn`'s
+    `ThreadRegistered` poll (`internal/subthread/spawn.go`) now exits on the first check,
+    because `HeadlessLaunch` returns a registered id. The belt-and-braces loop is unchanged
+    and its tests pass; the latent 30s `DefaultRegistrationWait` timeout that would have
+    fired in production (the cockpit UUID was never written by codex) no longer occurs.
+  - **Launch-to-registered latency — not observed against real codex.** Same gap ADR 0003
+    flags: the 30s `DefaultRegistrationWait` bound is asserted (the registration-timeout
+    path is unit-tested — session killed, no state written), but the typical wait was never
+    observed against a real codex sqlite. **Open, pending human measurement** during daily
+    driver use.
+  - **Manual end-to-end verification — deferred.** The production confirmation (launch a
+    thread from the composer, attach, detach — confirm a single row remains) requires a
+    real codex CLI + `$CODEX_HOME` and was flagged for human verification in PR #51; it
+    was not run in the build sandbox. **Open, pending human verification.**
+  - **Non-goal held: no `agentstate` schema migration.** Existing `state.json` entries
+    keyed by cockpit UUIDs are orphans; acceptable for an unreleased tool with no
+    production users. A startup sweep remains explicitly out of scope (PRD #48 non-goal).
