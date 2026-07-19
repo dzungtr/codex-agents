@@ -1,13 +1,17 @@
 package ui
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/dzungtr/codex-agents/internal/codexstate"
+	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
 )
 
 // stripANSI removes SGR escape sequences (the only kind lipgloss emits) so
@@ -400,5 +404,89 @@ func TestTruncate_MultibyteInputCutRuneSafeWithEllipsis(t *testing.T) {
 	want := "éééé…"
 	if got != want {
 		t.Errorf("truncate(%q, 5) = %q, want %q", s, got, want)
+	}
+}
+
+// manyRows builds n same-status waiting rows titled "thread 0001".."thread
+// 000n", most-recent-first, so a viewport test has a list long enough to
+// overflow a small terminal.
+func manyRows(n int) []Row {
+	base := fixedNow()
+	rows := make([]Row, n)
+	for i := 0; i < n; i++ {
+		rows[i] = Row{
+			Thread: codexstate.Thread{
+				ID:         fmt.Sprintf("r%04d", i+1),
+				Title:      fmt.Sprintf("thread %04d", i+1),
+				Recency:    base.Add(-time.Duration(i+1) * time.Minute),
+				TokenCount: -1, MessageCount: -1,
+			},
+			Status: tmuxstatus.StatusWaiting,
+		}
+	}
+	return rows
+}
+
+// TestViewport_FullListWhenHeightUnset locks in the regression guard for
+// the scroll fix's fallback: before the first tea.WindowSizeMsg (and in
+// every unit test that never sends one) the list must render every visible
+// row, exactly as it did before the viewport was introduced. Otherwise the
+// initial frame and the whole test suite would see a truncated list.
+func TestViewport_FullListWhenHeightUnset(t *testing.T) {
+	m := New(manyRows(50)).WithClock(fixedNow)
+	view := m.View()
+	for i := 1; i <= 50; i++ {
+		title := fmt.Sprintf("thread %04d", i)
+		if !strings.Contains(view, title) {
+			t.Fatalf("expected %q in view when height unset, missing (viewport truncated?):\n%s", title, view)
+		}
+	}
+}
+
+// TestViewport_KeepsHeaderVisibleWhenListOverflows is the scroll bug's
+// core regression test: with a terminal shorter than the full list, the
+// title bar, header line and footer must all remain on screen — before the
+// fix, rendering every row pushed them off the top so only the bottom rows
+// were visible. We assert the chrome strings appear, and that the cursor's
+// own row (selected, somewhere in the middle) is present too.
+func TestViewport_KeepsHeaderVisibleWhenListOverflows(t *testing.T) {
+	m := New(manyRows(100)).WithClock(fixedNow)
+	m = send(m, tea.WindowSizeMsg{Width: 80, Height: 12})
+	view := m.View()
+
+	for _, want := range []string{"codex — orchestrator", "100 threads", "navigate"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("expected %q to stay visible under a short terminal, got:\n%s", want, view)
+		}
+	}
+	// Cursor starts at 0 (top row), so the first thread must be visible
+	// even though the list overflows — this is exactly the row that used
+	// to scroll off the top.
+	if !strings.Contains(view, "thread 0001") {
+		t.Errorf("expected top/cursor row 'thread 0001' visible, got:\n%s", view)
+	}
+}
+
+// TestViewport_FollowsCursorToBottom checks the window slides down to keep
+// the selected row on screen when the cursor moves past the bottom of the
+// window. With 100 rows in a 12-line terminal only a handful fit, so
+// walking the cursor to the last row must surface that last row (and drop
+// the first) rather than leaving it scrolled off.
+func TestViewport_FollowsCursorToBottom(t *testing.T) {
+	m := New(manyRows(100)).WithClock(fixedNow)
+	m = send(m, tea.WindowSizeMsg{Width: 80, Height: 12})
+	for i := 0; i < 99; i++ {
+		m = send(m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	view := m.View()
+	if !strings.Contains(view, "thread 0100") {
+		t.Errorf("expected last row 'thread 0100' visible after cursor moved to bottom, got:\n%s", view)
+	}
+	if strings.Contains(view, "thread 0001") {
+		t.Errorf("expected first row 'thread 0001' to have scrolled off once cursor is at the bottom, got:\n%s", view)
+	}
+	// Chrome still anchored.
+	if !strings.Contains(view, "codex — orchestrator") {
+		t.Errorf("title bar vanished while scrolled to bottom, got:\n%s", view)
 	}
 }

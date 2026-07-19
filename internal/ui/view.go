@@ -176,16 +176,121 @@ func (m Model) listView() string {
 
 	now := m.now()
 	width := m.listWidth()
+	start, end := m.viewport()
 	var b strings.Builder
-	for vi, idx := range m.visible {
+	for vi := start; vi < end; vi++ {
+		idx := m.visible[vi]
 		row := m.rows[idx]
 		selected := vi == m.cursor
 		b.WriteString(renderRow(row, selected, now, width))
-		if vi != len(m.visible)-1 {
+		if vi < end-1 {
 			b.WriteString("\n")
 		}
 	}
 	return b.String()
+}
+
+// viewport returns the half-open [start, end) range of indices into
+// m.visible that the current frame should render. The cockpit layout is a
+// fixed stack — title bar, header, the list, a composer rule, the composer
+// bar and the footer — so the list only gets the rows left over between the
+// header (top) and the composer (bottom). Without this bound the list
+// rendered every visible row and the terminal scrolled, so only the bottom
+// rows were visible and the title bar, header/filter and top rows slipped
+// off-screen (the scroll bug). viewport keeps that from happening by
+// windowing the list around the cursor: the selected row is always on
+// screen, and the window slides only as far as needed to follow cursor
+// movement, so the list doesn't jump any more than necessary.
+//
+// When m.height is unset (<= 0) — the pre-first-WindowSizeMsg initial frame
+// and every unit/model test that never sends one — the whole visible set is
+// returned, matching the previous unbounded render so existing tests and
+// the initial frame are unchanged.
+func (m Model) viewport() (start, end int) {
+	n := len(m.visible)
+	if n == 0 {
+		return 0, 0
+	}
+	maxRows := m.listMaxRows()
+	if maxRows <= 0 || maxRows >= n {
+		return 0, n
+	}
+	// Window around the cursor, clamped to [0, n]. Start prefers to leave
+	// the cursor near the top of the window (so moving down reveals what's
+	// below, the natural list-scroll direction); only once the cursor is
+	// within maxRows of the bottom does the window lock to the end.
+	start = m.cursor - maxRows/2
+	if start < 0 {
+		start = 0
+	}
+	end = start + maxRows
+	if end > n {
+		end = n
+		start = end - maxRows
+		if start < 0 {
+			start = 0
+		}
+	}
+	return start, end
+}
+
+// listMaxRows is the maximum number of list entries (each two terminal
+// lines, per renderRow) the list may render this frame: the terminal height
+// minus the fixed chrome above and below the list. The chrome height is
+// computed from the same pieces View assembles so it stays in lockstep with
+// the real layout: title bar (1) + header (1) + the blank line under the
+// header (1) + composer rule (1) + composer bar (2: prompt line + hint) +
+// footer (1) = 7, plus the blank line View writes after the list (1) = 8.
+// A shown status line adds one more line above the list (see View's
+// statusLine branch), and a focused/composing composer grows its bar beyond
+// two lines, so both are accounted for here.
+func (m Model) listMaxRows() int {
+	if m.height <= 0 {
+		return 0
+	}
+	const chromeRows = 8
+	chromeLines := chromeRows
+	if m.statusLine != "" && !m.replyFocused {
+		chromeLines++
+	}
+	composerLines := m.composerLineCount()
+	chromeLines += composerLines - 2 // composerBar baseline is 2 lines, already in chromeRows
+	avail := m.height - chromeLines
+	if avail < 1 {
+		return 1
+	}
+	return avail / 2
+}
+
+// composerLineCount reports how many terminal lines composerBar will emit
+// this frame, so listMaxRows can reserve the right amount of vertical space
+// for it. Mirrors composerBar's own line math: idle+empty is 2 (placeholder
+// + hint); otherwise it's 1 + the number of wrapped continuation lines +
+// 1 for the hint. Capped at composerMaxLines (composerBar's own cap) so the
+// two stay in agreement about how tall the composer can grow.
+func (m Model) composerLineCount() int {
+	if !m.composerFocused && m.composerTask == "" {
+		return 2
+	}
+	width := m.listWidth()
+	contWidth := width - 2
+	if contWidth < 1 {
+		contWidth = 1
+	}
+	pillWidth := len([]rune("[" + m.composerProfile() + "]"))
+	firstWidth := width - 2 - 2 - pillWidth
+	if firstWidth < 1 {
+		firstWidth = 1
+	}
+	text := m.composerTask
+	if m.composerFocused {
+		text += "_"
+	}
+	lines := wrapComposerText(text, firstWidth, contWidth)
+	if len(lines) > composerMaxLines {
+		lines = lines[len(lines)-composerMaxLines:]
+	}
+	return 1 + len(lines) // first line (with pill) + continuation lines, then +1 for the hint
 }
 
 // maxContentWidth caps listWidth on a wide terminal, mirroring the style
