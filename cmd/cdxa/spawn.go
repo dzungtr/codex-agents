@@ -34,6 +34,7 @@ func runSpawn(args []string, d deps) (int, error) {
 	// as the task. This keeps both `spawn "t" --profile X` and
 	// `spawn --profile X "t"` working.
 	var profile string
+	var workspaceFlag string
 	var positionals []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -46,6 +47,14 @@ func runSpawn(args []string, d deps) (int, error) {
 			i++
 		case strings.HasPrefix(a, "--profile=") || strings.HasPrefix(a, "-profile="):
 			profile = strings.SplitN(a, "=", 2)[1]
+		case a == "--workspace" || a == "-workspace":
+			if i+1 >= len(args) {
+				return exitOperErr, fmt.Errorf("cdxa spawn: --workspace requires a value")
+			}
+			workspaceFlag = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--workspace=") || strings.HasPrefix(a, "-workspace="):
+			workspaceFlag = strings.SplitN(a, "=", 2)[1]
 		case strings.HasPrefix(a, "-"):
 			return exitOperErr, fmt.Errorf("cdxa spawn: unknown flag %q", a)
 		default:
@@ -66,8 +75,13 @@ func runSpawn(args []string, d deps) (int, error) {
 		return exitOperErr, fmt.Errorf("cdxa spawn: resolve working directory: %w", err)
 	}
 
+	workspaceMode, ok := subthread.ParseWorkspaceMode(workspaceFlag)
+	if !ok {
+		return exitOperErr, fmt.Errorf("cdxa spawn: invalid --workspace %q (want worktree or inplace)", workspaceFlag)
+	}
+
 	spawner := newSpawnerFor(d, d.codexHome, d.statePath, startDir)
-	threadID, err := spawner.Spawn(task, profile)
+	threadID, err := spawner.Spawn(task, profile, workspaceMode)
 	if err != nil {
 		return exitOperErr, fmt.Errorf("cdxa spawn: %w", err)
 	}
@@ -116,16 +130,31 @@ type launcherAdapter struct {
 	startDir string
 }
 
-func (a launcherAdapter) HeadlessLaunch(task, profile string) (string, error) {
+func (a launcherAdapter) HeadlessLaunch(task, profile string, mode subthread.WorkspaceMode) (string, error) {
 	res, err := a.l.HeadlessLaunch(codexlaunch.LaunchRequest{
-		StartDir: a.startDir,
-		Task:     task,
-		Profile:  profile,
+		StartDir:      a.startDir,
+		Task:          task,
+		Profile:       profile,
+		WorkspaceMode: toCodexlaunchWorkspaceMode(mode),
 	})
 	if err != nil {
 		return "", err
 	}
 	return res.ThreadID, nil
+}
+
+// toCodexlaunchWorkspaceMode translates the subthread-layer WorkspaceMode
+// (kept in internal/subthread so that package doesn't import
+// internal/codexlaunch) to the codexlaunch-layer enum that LaunchRequest
+// carries. The two enums are isomorphic; this is the single translation
+// point.
+func toCodexlaunchWorkspaceMode(m subthread.WorkspaceMode) codexlaunch.WorkspaceMode {
+	switch m {
+	case subthread.WorkspaceInPlace:
+		return codexlaunch.WorkspaceInPlace
+	default:
+		return codexlaunch.WorkspaceWorktree
+	}
 }
 
 // registrarAdapter adapts codexstate.ThreadRegistered to the

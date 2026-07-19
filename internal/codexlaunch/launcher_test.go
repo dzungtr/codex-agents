@@ -424,3 +424,65 @@ func TestResume_CallerProfileOverridesPriorState(t *testing.T) {
 		t.Errorf("tmux call = %v, want %v (caller-supplied profile used for -p)", tmux.calls[0], want)
 	}
 }
+
+func TestLaunch_InPlaceModeOnGitDirRunsInCallerCwd(t *testing.T) {
+	git := &fakeGitRunner{responses: map[string]fakeGitResponse{
+		"[rev-parse --show-toplevel]": {out: "/repo\n"},
+	}}
+	tmux := &fakeTmuxRunner{}
+	l, statePath := newTestLauncher(t, git, tmux, []string{"0123456789abcdef"})
+
+	res, err := l.Launch(LaunchRequest{
+		StartDir:      "/repo/sub",
+		Task:          "explore the graph",
+		Profile:       "general-agentic",
+		WorkspaceMode: WorkspaceInPlace,
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if !res.InPlace {
+		t.Errorf("expected InPlace=true for in-place mode")
+	}
+	if res.WorktreePath != "/repo/sub" {
+		t.Errorf("WorktreePath = %q, want /repo/sub (caller's cwd)", res.WorktreePath)
+	}
+	if res.Branch != "" {
+		t.Errorf("Branch = %q, want empty for in-place run", res.Branch)
+	}
+	if len(tmux.calls) != 1 {
+		t.Fatalf("expected exactly one tmux call, got %v", tmux.calls)
+	}
+	wantSession := tmuxstatus.SessionName(res.ThreadID)
+	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", res.ThreadID, notifyhook.DefaultEventsPath(statePath), nil)
+	wantCodexArgs := NewThreadArgs(NewThreadSpec{Profile: "general-agentic", Task: "explore the graph", Notify: wantNotify})
+	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(wantSession, "/repo/sub", wantCodexArgs))
+	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {
+		t.Errorf("tmux call = %v, want %v", tmux.calls[0], want)
+	}
+}
+
+func TestLaunch_WorktreeModeOnGitDirCreatesWorktree(t *testing.T) {
+	git := &fakeGitRunner{responses: map[string]fakeGitResponse{
+		"[rev-parse --show-toplevel]":                               {out: "/repo\n"},
+		"[rev-parse --verify --quiet refs/heads/explore-the-graph]": {err: fmt.Errorf("exit 1")},
+	}}
+	tmux := &fakeTmuxRunner{}
+	l, _ := newTestLauncher(t, git, tmux, []string{"0123456789abcdef"})
+
+	res, err := l.Launch(LaunchRequest{
+		StartDir:      "/repo/sub",
+		Task:          "explore the graph",
+		Profile:       "general-agentic",
+		WorkspaceMode: WorkspaceWorktree,
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if res.InPlace {
+		t.Errorf("expected InPlace=false for worktree mode on a git dir")
+	}
+	if res.Branch != "explore-the-graph" {
+		t.Errorf("Branch = %q, want explore-the-graph", res.Branch)
+	}
+}

@@ -83,7 +83,7 @@ func TestResolveWorkspace_NonGitDirRunsInPlace(t *testing.T) {
 	f := &fakeGitRunner{responses: map[string]fakeGitResponse{
 		"[rev-parse --show-toplevel]": {err: fmt.Errorf("not a git repository")},
 	}}
-	ws, err := ResolveWorkspace(f, "/tmp/plain-dir", "Fix auth hook")
+	ws, err := ResolveWorkspace(f, "/tmp/plain-dir", "Fix auth hook", WorkspaceWorktree)
 	if err != nil {
 		t.Fatalf("ResolveWorkspace: %v", err)
 	}
@@ -105,10 +105,10 @@ func TestResolveWorkspace_NonGitDirRunsInPlace(t *testing.T) {
 
 func TestResolveWorkspace_GitDirCreatesWorktree(t *testing.T) {
 	f := &fakeGitRunner{responses: map[string]fakeGitResponse{
-		"[rev-parse --show-toplevel]":                          {out: "/repo\n"},
+		"[rev-parse --show-toplevel]":                           {out: "/repo\n"},
 		"[rev-parse --verify --quiet refs/heads/fix-auth-hook]": {err: fmt.Errorf("exit 1")},
 	}}
-	ws, err := ResolveWorkspace(f, "/repo/sub", "Fix auth hook")
+	ws, err := ResolveWorkspace(f, "/repo/sub", "Fix auth hook", WorkspaceWorktree)
 	if err != nil {
 		t.Fatalf("ResolveWorkspace: %v", err)
 	}
@@ -139,10 +139,10 @@ func TestResolveWorkspace_GitDirCreatesWorktree(t *testing.T) {
 
 func TestResolveWorkspace_CollisionAppendsSuffix(t *testing.T) {
 	f := &fakeGitRunner{responses: map[string]fakeGitResponse{
-		"[rev-parse --show-toplevel]":                          {out: "/repo\n"},
+		"[rev-parse --show-toplevel]":                           {out: "/repo\n"},
 		"[rev-parse --verify --quiet refs/heads/fix-auth-hook]": {out: "abc123\n"}, // branch already exists
 	}}
-	ws, err := ResolveWorkspace(f, "/repo", "Fix auth hook")
+	ws, err := ResolveWorkspace(f, "/repo", "Fix auth hook", WorkspaceWorktree)
 	if err != nil {
 		t.Fatalf("ResolveWorkspace: %v", err)
 	}
@@ -157,10 +157,10 @@ func TestResolveWorkspace_CollisionOnExistingWorktreeDir(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 	f := &fakeGitRunner{responses: map[string]fakeGitResponse{
-		"[rev-parse --show-toplevel]":                          {out: dir + "\n"},
+		"[rev-parse --show-toplevel]":                           {out: dir + "\n"},
 		"[rev-parse --verify --quiet refs/heads/fix-auth-hook]": {err: fmt.Errorf("exit 1")}, // no branch, but dir exists on disk
 	}}
-	ws, err := ResolveWorkspace(f, dir, "Fix auth hook")
+	ws, err := ResolveWorkspace(f, dir, "Fix auth hook", WorkspaceWorktree)
 	if err != nil {
 		t.Fatalf("ResolveWorkspace: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestResolveWorkspace_RealGit(t *testing.T) {
 	runGit(t, dir, "add", "README.md")
 	runGit(t, dir, "commit", "-q", "-m", "init")
 
-	ws, err := ResolveWorkspace(GitRunnerFunc(run), dir, "Fix auth hook")
+	ws, err := ResolveWorkspace(GitRunnerFunc(run), dir, "Fix auth hook", WorkspaceWorktree)
 	if err != nil {
 		t.Fatalf("ResolveWorkspace: %v", err)
 	}
@@ -205,4 +205,46 @@ func runGit(t *testing.T, dir string, args ...string) (string, error) {
 		t.Logf("git %v (dir=%s) failed: %v\n%s", args, dir, err, out)
 	}
 	return out, err
+}
+
+func TestResolveWorkspace_InPlaceModeOnGitDirRunsInPlace(t *testing.T) {
+	f := &fakeGitRunner{responses: map[string]fakeGitResponse{
+		"[rev-parse --show-toplevel]": {out: "/repo\n"},
+	}}
+	ws, err := ResolveWorkspace(f, "/repo/sub", "Fix auth hook", WorkspaceInPlace)
+	if err != nil {
+		t.Fatalf("ResolveWorkspace: %v", err)
+	}
+	if !ws.InPlace {
+		t.Fatalf("expected InPlace=true for in-place mode on a git dir")
+	}
+	if ws.WorkDir != "/repo/sub" {
+		t.Fatalf("WorkDir = %q, want /repo/sub (caller's cwd)", ws.WorkDir)
+	}
+	if ws.Branch != "" {
+		t.Fatalf("Branch = %q, want empty for in-place run", ws.Branch)
+	}
+	for _, c := range f.calls {
+		if len(c.args) > 0 && c.args[0] == "worktree" {
+			t.Fatalf("did not expect a worktree add call for in-place mode, got %v", c.args)
+		}
+	}
+}
+
+func TestResolveWorkspace_WorktreeModeOnGitDirCreatesWorktree(t *testing.T) {
+	f := &fakeGitRunner{responses: map[string]fakeGitResponse{
+		"[rev-parse --show-toplevel]":                           {out: "/repo\n"},
+		"[rev-parse --verify --quiet refs/heads/fix-auth-hook]": {err: fmt.Errorf("exit 1")},
+	}}
+	ws, err := ResolveWorkspace(f, "/repo/sub", "Fix auth hook", WorkspaceWorktree)
+	if err != nil {
+		t.Fatalf("ResolveWorkspace: %v", err)
+	}
+	if ws.InPlace {
+		t.Fatalf("expected InPlace=false for worktree mode on a git dir")
+	}
+	wantDir := filepath.Join("/repo", ".worktrees", "fix-auth-hook")
+	if ws.WorkDir != wantDir {
+		t.Fatalf("WorkDir = %q, want %q", ws.WorkDir, wantDir)
+	}
 }
