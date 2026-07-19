@@ -68,3 +68,17 @@ for the full architectural contract (stack, read-only sqlite state source, tmux-
 process model, worktree-per-thread launch semantics, status derivation) and measured results.
 The original problem/solution/user-story writeup lives in
 [PRD issue #1](https://github.com/dzungtr/codex-agents/issues/1).
+
+## Headless delegation (`cdxa`)
+
+A codex thread can delegate work to another codex thread via the headless
+`cdxa` binary (a second binary built from the same module, sharing
+`internal/`). The architectural contract — three commands (`spawn`,
+`output`, `send`), JSON-only stdout, and a frozen exit-code mapping — is
+[ADR 0003](docs/adr/0003-cdxa-subthread-cli.md); vocabulary (thread,
+subthread, turn) is in [`CONTEXT.md`](CONTEXT.md).
+
+For copy-pasteable parent-thread prompt patterns — poll loops, turn
+tracking, send-then-collect refinement, `--wait` blocking, and workspace
+selection — see the
+[cdxa subthread delegation cookbook](docs/cdxa-subthread-cookbook.md).
