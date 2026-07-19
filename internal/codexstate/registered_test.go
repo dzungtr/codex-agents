@@ -85,3 +85,97 @@ func TestThreadRegistered_NoDataAtAllIsNotRegistered(t *testing.T) {
 		t.Errorf("expected false when no codex data exists at all, got true")
 	}
 }
+
+func TestThreadByCWD_FoundInNewestSQLite(t *testing.T) {
+	dir := t.TempDir()
+	buildFixtureDB(t, dir, "state_5.sqlite", []fixtureThread{
+		{ID: "spawned-by-cwd", Title: "Spawned", CWD: "/repo/.worktrees/fix-auth-hook", Model: "m", GitBranch: "main", RecencyAgo: time.Second},
+	})
+
+	id, found, err := ThreadByCWD(dir, "/repo/.worktrees/fix-auth-hook")
+	if err != nil {
+		t.Fatalf("ThreadByCWD: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected to find a thread by cwd, got not found")
+	}
+	if id != "spawned-by-cwd" {
+		t.Errorf("id = %q, want spawned-by-cwd", id)
+	}
+}
+
+func TestThreadByCWD_NotYetPresent(t *testing.T) {
+	dir := t.TempDir()
+	buildFixtureDB(t, dir, "state_5.sqlite", []fixtureThread{
+		{ID: "other-1", Title: "Other", CWD: "/repo/.worktrees/other", Model: "m", GitBranch: "main", RecencyAgo: time.Second},
+	})
+
+	id, found, err := ThreadByCWD(dir, "/repo/.worktrees/fix-auth-hook")
+	if err != nil {
+		t.Fatalf("ThreadByCWD: %v", err)
+	}
+	if found {
+		t.Errorf("expected not found, got id=%q", id)
+	}
+}
+
+func TestThreadByCWD_ArchivedStillResolvable(t *testing.T) {
+	dir := t.TempDir()
+	buildFixtureDB(t, dir, "state_5.sqlite", []fixtureThread{
+		{ID: "archived-cwd", Title: "Archived", CWD: "/repo/.worktrees/old", Model: "m", GitBranch: "main", Archived: true, RecencyAgo: time.Second},
+	})
+
+	id, found, err := ThreadByCWD(dir, "/repo/.worktrees/old")
+	if err != nil {
+		t.Fatalf("ThreadByCWD: %v", err)
+	}
+	if !found || id != "archived-cwd" {
+		t.Errorf("expected archived-cwd resolvable by cwd, got id=%q found=%v", id, found)
+	}
+}
+
+func TestThreadByCWD_NormalizesCWD(t *testing.T) {
+	dir := t.TempDir()
+	buildFixtureDB(t, dir, "state_5.sqlite", []fixtureThread{
+		{ID: "norm-1", Title: "Norm", CWD: "/repo/.worktrees/x", Model: "m", GitBranch: "main", RecencyAgo: time.Second},
+	})
+
+	// A trailing-slash cwd must still match the stored (clean) path.
+	id, found, err := ThreadByCWD(dir, "/repo/.worktrees/x/")
+	if err != nil {
+		t.Fatalf("ThreadByCWD: %v", err)
+	}
+	if !found || id != "norm-1" {
+		t.Errorf("expected norm-1 via trailing-slash cwd, got id=%q found=%v", id, found)
+	}
+}
+
+func TestThreadByCWD_NoStateDBFallsBackToJSONL(t *testing.T) {
+	dir := t.TempDir()
+	sessionsDir := dir + "/sessions"
+	writeRolloutFile(t, sessionsDir+"/rollout.jsonl", sessionMetaPayload{
+		ID:    "jsonl-by-cwd",
+		Title: "JSONL",
+		CWD:   "/repo/.worktrees/jsonl",
+		Model: "m",
+	}, 0, false)
+
+	id, found, err := ThreadByCWD(dir, "/repo/.worktrees/jsonl")
+	if err != nil {
+		t.Fatalf("ThreadByCWD: %v", err)
+	}
+	if !found || id != "jsonl-by-cwd" {
+		t.Errorf("expected jsonl-by-cwd via jsonl fallback, got id=%q found=%v", id, found)
+	}
+}
+
+func TestThreadByCWD_NoDataAtAllIsNotFound(t *testing.T) {
+	dir := t.TempDir()
+	id, found, err := ThreadByCWD(dir, "/repo/.worktrees/whatever")
+	if err != nil {
+		t.Fatalf("ThreadByCWD on empty codexHome: %v", err)
+	}
+	if found {
+		t.Errorf("expected not found when no codex data exists at all, got id=%q", id)
+	}
+}

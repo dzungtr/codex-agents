@@ -34,11 +34,13 @@ func TestHeadlessLaunch_ReturnsThreadIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HeadlessLaunch: %v", err)
 	}
+	// PRD #48: ThreadID is codex id (from the registrar); the session is
+	// renamed to derive from codex id after registration.
 	if res.ThreadID != "abcd1234efgh5678" {
-		t.Errorf("ThreadID = %q, want abcd1234efgh5678", res.ThreadID)
+		t.Errorf("ThreadID = %q, want codex id abcd1234efgh5678", res.ThreadID)
 	}
 	if res.SessionName != tmuxstatus.SessionName("abcd1234efgh5678") {
-		t.Errorf("SessionName = %q, want %q", res.SessionName, tmuxstatus.SessionName("abcd1234efgh5678"))
+		t.Errorf("SessionName = %q, want %q (renamed to codex id)", res.SessionName, tmuxstatus.SessionName("abcd1234efgh5678"))
 	}
 	if res.Profile != "general-agentic" {
 		t.Errorf("Profile = %q, want general-agentic", res.Profile)
