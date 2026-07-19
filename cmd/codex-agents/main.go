@@ -306,7 +306,7 @@ func turnEndedByThread(st agentstate.State) map[string]bool {
 func launchAction(launcher *codexlaunch.Launcher, startDir string) func(task, profile string) tea.Cmd {
 	return func(task, profile string) tea.Cmd {
 		return func() tea.Msg {
-			res, err := launcher.Launch(codexlaunch.LaunchRequest{StartDir: startDir, Task: task, Profile: profile})
+			res, err := launcher.Launch(codexlaunch.LaunchRequest{StartDir: startDir, Task: task, Profile: profile, WorkspaceMode: codexlaunch.WorkspaceInPlace})
 			if err != nil {
 				return ui.ThreadLaunchErrorMsg{Err: err}
 			}
