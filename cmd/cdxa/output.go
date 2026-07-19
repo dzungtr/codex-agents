@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"time"
 
 	"github.com/dzungtr/codex-agents/internal/subthread"
 )
@@ -24,12 +25,18 @@ const (
 // business logic lives here — this file is flag parsing, JSON printing, and
 // exit-code mapping only (ADR 0003 decision 1).
 //
-// --wait N (blocking poll sugar) is a separate slice (#32) and is NOT
-// implemented here; the flag is reserved so a later slice can add it without
-// restructuring this file's arg parsing.
+// --wait N (blocking poll sugar, issue #32) parses here as seconds and is
+// passed straight through to subthread.Output as a time.Duration. The wait
+// loop itself lives in subthread; this file only parses the flag and maps the
+// result to JSON + exit code, the same separation #28 established.
 func runOutput(args []string, d deps) (int, error) {
 	fs := flag.NewFlagSet("output", flag.ContinueOnError)
 	fs.SetOutput(nil) // silence flag.Usage; cdxa prints its own errors
+	// --wait N (seconds) is the blocking-poll sugar from issue #32. 0 and the
+	// omitted flag both mean "point-in-time poll" (issue #28's behaviour): the
+	// poll reads the rollout once and returns. N > 0 re-polls on subthread's
+	// poll cadence until a completed turn appears or N seconds elapse.
+	wait := fs.Int("wait", 0, "block up to N seconds for a completed turn")
 	if err := fs.Parse(args); err != nil {
 		return exitOperErr, fmt.Errorf("cdxa output: parse flags: %w", err)
 	}
@@ -39,7 +46,7 @@ func runOutput(args []string, d deps) (int, error) {
 	}
 	threadID := fs.Arg(0)
 
-	result, err := subthread.Output(d.state, d.live, d.codexHome, threadID)
+	result, err := subthread.Output(d.state, d.live, d.codexHome, threadID, time.Duration(*wait)*time.Second)
 	if err != nil {
 		// subthread.Output returns ErrOperational for the exit-1 cases; the
 		// error itself carries the detail. main prints the JSON error object
