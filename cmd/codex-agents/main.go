@@ -71,7 +71,24 @@ func runNotifyHook(args []string) {
 		fmt.Fprintln(os.Stderr, "codex-agents notify-hook: resolve state path:", err)
 		statePath = ""
 	}
-	notifyhook.Run(os.Stderr, notifyhook.ExecForwardRunner{}, statePath, threadID, eventsPath, forward, payload, time.Now().UTC())
+	// PRD #48: the wrapper identity positional is the tmux session name
+	// (a stable handle from launch time), not codex thread id - codex id
+	// is not known when the tmux launch command is built. Resolve it back
+	// to codex thread id via agentstate (the entry keyed by codex id,
+	// written by Launch, carries TmuxSession) so events.jsonl and
+	// agentstate.LastTurnEvent end up keyed by codex id. On resolution
+	// failure (e.g. a hook firing for a thread state.json does not know
+	// about yet) degrade to the handle as-is rather than failing codex
+	// turn-completion flow.
+	resolved := threadID
+	if statePath != "" {
+		if id, ok, rErr := agentstate.FindThreadIDBySession(statePath, threadID); rErr != nil {
+			fmt.Fprintln(os.Stderr, "codex-agents notify-hook: resolve session:", rErr)
+		} else if ok {
+			resolved = id
+		}
+	}
+	notifyhook.Run(os.Stderr, notifyhook.ExecForwardRunner{}, statePath, resolved, eventsPath, forward, payload, time.Now().UTC())
 }
 
 func run() error {

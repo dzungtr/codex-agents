@@ -77,6 +77,14 @@ func TestKillSessionArgs(t *testing.T) {
 	}
 }
 
+func TestRenameSessionArgs(t *testing.T) {
+	got := RenameSessionArgs("cxa-cockpit", "cxa-codex1234")
+	want := []string{"rename-session", "-t", "cxa-cockpit", "cxa-codex1234"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("RenameSessionArgs() = %v, want %v", got, want)
+	}
+}
+
 func TestRemainOnExitArgs(t *testing.T) {
 	got := RemainOnExitArgs()
 	want := []string{"set-option", "-g", "remain-on-exit", "on"}

@@ -171,3 +171,27 @@ func MarkHidden(path, threadID string) error {
 	st.Threads[threadID] = entry
 	return Save(path, st)
 }
+
+// FindThreadIDBySession scans the state at path for the thread whose
+// TmuxSession field equals session, returning its thread id and whether one
+// was found. This is the notify-hook resolution seam (PRD #48): the
+// notify-hook wrapper identity positional is the tmux session name (a stable
+// handle from launch time, since codex own thread id is not known until
+// codex registers, which is after the tmux launch command is built). At
+// hook-fire time (always post-registration, post-Launch) the agentstate
+// entry keyed by codex id already exists with its TmuxSession set, so this
+// scan resolves the session handle back to codex thread id. A not-found
+// result lets the caller degrade to using the handle as-is (preserving the
+// pre-PRD-#48 behaviour) rather than failing codex turn-completion flow.
+func FindThreadIDBySession(path, session string) (string, bool, error) {
+	st, err := Load(path)
+	if err != nil {
+		return "", false, err
+	}
+	for id, entry := range st.Threads {
+		if entry.TmuxSession == session {
+			return id, true, nil
+		}
+	}
+	return "", false, nil
+}

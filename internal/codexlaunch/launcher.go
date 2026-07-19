@@ -8,9 +8,56 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dzungtr/codex-agents/internal/agentstate"
+	"github.com/dzungtr/codex-agents/internal/codexstate"
 	"github.com/dzungtr/codex-agents/internal/notifyhook"
 	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
 )
+
+// DefaultPollInterval is the delay between registration polls when a
+// Launcher PollInterval is zero. Mirrors internal/subthread
+// DefaultPollInterval (ADR 0003 decision 4) so the interactive launch
+// path and the headless spawn path share the same registration-poll
+// cadence.
+const DefaultPollInterval = 500 * time.Millisecond
+
+// DefaultRegistrationWait bounds how long Launch blocks waiting for
+// codex to register the freshly started thread (i.e. write its row to
+// codex own sqlite). Mirrors internal/subthread DefaultRegistrationWait.
+// On timeout Launch kills the tmux session and returns a clear error
+// - no optimistic row is emitted, so no duplicate to clean up (PRD #48).
+const DefaultRegistrationWait = 30 * time.Second
+
+// ErrRegistrationTimeout is returned by Launch when the freshly started
+// thread did not appear in codex state within the Launcher
+// RegistrationWait. The tmux session is killed before returning.
+var ErrRegistrationTimeout = fmt.Errorf("codexlaunch: thread did not register in codex state before timeout")
+
+// Registrar discovers the thread id codex assigned to a freshly
+// launched thread by matching the worktree cwd against codex own
+// records. The production adapter is cwdRegistrar (over
+// codexstate.ThreadByCWD); tests inject a fake that scripts
+// no-row-then-row responses to model codex startup-to-registration
+// latency. This mirrors internal/subthread Registrar seam (ADR 0003
+// decision 4) so the interactive launch path and the headless spawn
+// path block on the same registration signal.
+type Registrar interface {
+	// ThreadIDByCWD returns codex thread id whose cwd matches cwd, plus
+	// whether one has been registered yet. A false ok with a nil error
+	// means "not registered yet, keep polling".
+	ThreadIDByCWD(cwd string) (id string, ok bool, err error)
+}
+
+// cwdRegistrar adapts codexstate.ThreadByCWD to the Launcher.Registrar
+// interface. It captures codexHome so each poll queries codex newest
+// state_*.sqlite fresh - the id is discovered the moment codex writes
+// the thread row, not from a cached read.
+type cwdRegistrar struct {
+	codexHome string
+}
+
+func (r cwdRegistrar) ThreadIDByCWD(cwd string) (string, bool, error) {
+	return codexstate.ThreadByCWD(r.codexHome, cwd)
+}
 
 // defaultLivenessAttempts/defaultLivenessInterval bound verifyAlive's
 // total polling window (5 x 60ms = 300ms) added to every Launch/Resume: a
@@ -66,6 +113,25 @@ type Launcher struct {
 	// budget.
 	LivenessAttempts int
 	LivenessInterval time.Duration
+	// Registrar discovers the thread id codex assigned to a freshly
+	// launched thread by matching the worktree cwd (PRD #48: Launch
+	// blocks until codex registers, then returns codex id as
+	// LaunchResult.ThreadID). Defaults to a cwdRegistrar over
+	// codexstate.ThreadByCWD; tests inject a fake that scripts
+	// no-row-then-row responses.
+	Registrar Registrar
+	// PollInterval is the delay between registration polls. Zero means
+	// DefaultPollInterval; tests override for a tighter/deterministic
+	// cadence.
+	PollInterval time.Duration
+	// RegistrationWait bounds how long Launch blocks waiting for codex
+	// to register the freshly started thread. Zero means
+	// DefaultRegistrationWait; tests override for a tighter budget.
+	RegistrationWait time.Duration
+	// RegSleep is the delay the registration poll loop uses between
+	// attempts. Defaults to time.Sleep; tests override to a no-op so
+	// the suite does not actually wait out the polling window.
+	RegSleep func(time.Duration)
 }
 
 func (l *Launcher) newThreadID() string {
@@ -108,6 +174,61 @@ func (l *Launcher) livenessInterval() time.Duration {
 		return l.LivenessInterval
 	}
 	return defaultLivenessInterval
+}
+
+func (l *Launcher) registrar() Registrar {
+	if l.Registrar != nil {
+		return l.Registrar
+	}
+	return cwdRegistrar{codexHome: l.CodexHome}
+}
+
+func (l *Launcher) pollInterval() time.Duration {
+	if l.PollInterval > 0 {
+		return l.PollInterval
+	}
+	return DefaultPollInterval
+}
+
+func (l *Launcher) registrationWait() time.Duration {
+	if l.RegistrationWait > 0 {
+		return l.RegistrationWait
+	}
+	return DefaultRegistrationWait
+}
+
+func (l *Launcher) regSleep() func(time.Duration) {
+	if l.RegSleep != nil {
+		return l.RegSleep
+	}
+	return time.Sleep
+}
+
+// waitForRegistration polls the Registrar until codex has written the
+// freshly launched thread row (discovered by matching the worktree
+// cwd), returning codex own thread id. Bounded by RegistrationWait;
+// on timeout returns ErrRegistrationTimeout. The shape mirrors
+// internal/subthread.Spawner.Spawn poll loop (check first, then sleep)
+// so the common case - codex registered during Launch liveness poll -
+// is one check, zero sleeps.
+func (l *Launcher) waitForRegistration(cwd string) (string, error) {
+	deadline := time.Now().Add(l.registrationWait())
+	sleep := l.regSleep()
+	interval := l.pollInterval()
+	reg := l.registrar()
+	for {
+		id, ok, err := reg.ThreadIDByCWD(cwd)
+		if err != nil {
+			return "", fmt.Errorf("codexlaunch: discover codex thread id for %s: %w", cwd, err)
+		}
+		if ok {
+			return id, nil
+		}
+		if !time.Now().Before(deadline) {
+			return "", ErrRegistrationTimeout
+		}
+		sleep(interval)
+	}
 }
 
 // verifyAlive polls session's pane a few times right after new-session/
@@ -190,8 +311,10 @@ type LaunchResult struct {
 
 // Launch resolves a worktree (or runs in place for a non-git start dir),
 // starts a detached tmux session running a brand-new codex thread in it,
-// and records the result in state.json. If the tmux start fails, no
-// state.json entry is written.
+// polls codex own state until the thread registers, and records the
+// result in state.json keyed by codex thread id (PRD #48: codex id is
+// the single source of truth for thread identity, not a cockpit-minted
+// UUID). If the tmux start fails, no state.json entry is written.
 func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 	// req.Profile passes through unchanged: an empty string is a
 	// legitimate signal from the composer ("no profile files on disk,
@@ -207,9 +330,13 @@ func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 		return LaunchResult{}, fmt.Errorf("codexlaunch: resolve workspace: %w", err)
 	}
 
-	threadID := l.newThreadID()
-	session := tmuxstatus.SessionName(threadID)
-	notifyArgs := l.notifyArgsFor(threadID, profile)
+	// The cockpit handle mints the tmux session name (cxa-<prefix>) and
+	// serves as the notify-hook wrapper identity positional - a stable
+	// handle from launch time. It is NOT thread identity: codex own
+	// thread id (discovered below once codex registers) is.
+	handle := l.newThreadID()
+	session := tmuxstatus.SessionName(handle)
+	notifyArgs := l.notifyArgsFor(session, profile)
 	codexArgs := NewThreadArgs(NewThreadSpec{Profile: profile, Model: req.Model, Task: req.Task, Notify: notifyArgs})
 	tmuxArgs := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(session, ws.WorkDir, codexArgs))
 
@@ -219,6 +346,37 @@ func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 	if err := l.verifyAlive(session); err != nil {
 		_ = l.Tmux.Run(tmuxstatus.KillSessionArgs(session))
 		return LaunchResult{}, err
+	}
+
+	// Block until codex has registered the thread (written its row to
+	// codex own sqlite), discovering codex thread id by matching the
+	// worktree cwd. This is the PRD #48 contract: LaunchResult.ThreadID
+	// is codex id, so the optimistic row, agentstate, and the
+	// notify-hook event feed all key by codex id and the
+	// RowsRefreshedMsg merge collapses the duplicate by construction.
+	threadID, err := l.waitForRegistration(ws.WorkDir)
+	if err != nil {
+		_ = l.Tmux.Run(tmuxstatus.KillSessionArgs(session))
+		return LaunchResult{}, err
+	}
+
+	// Rename the tmux session from the cockpit-derived name to one
+	// derived from codex id (cxa-<codexID>) so every downstream consumer
+	// that derives the session name from the thread id via
+	// tmuxstatus.SessionName (attach, liveness, interrupt, quick-reply,
+	// archive) keeps resolving to the actual session. The cockpit handle
+	// was needed only to name the session at creation time (codex id is
+	// not known until codex registers, which is after the tmux session
+	// starts). The notify-hook wrapper identity positional stays the
+	// original session name (baked into the launch command); runNotifyHook
+	// resolves it back to codex id via agentstate (the entry below stores
+	// the original session name as TmuxSession for that resolution).
+	renamed := tmuxstatus.SessionName(threadID)
+	if renamed != session {
+		if err := l.Tmux.Run(tmuxstatus.RenameSessionArgs(session, renamed)); err != nil {
+			_ = l.Tmux.Run(tmuxstatus.KillSessionArgs(session))
+			return LaunchResult{}, fmt.Errorf("codexlaunch: rename session to codex id: %w", err)
+		}
 	}
 
 	entry := agentstate.Entry{
@@ -232,7 +390,7 @@ func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 
 	return LaunchResult{
 		ThreadID:     threadID,
-		SessionName:  session,
+		SessionName:  renamed,
 		WorktreePath: ws.WorkDir,
 		Branch:       ws.Branch,
 		InPlace:      ws.InPlace,

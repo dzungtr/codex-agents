@@ -78,6 +78,18 @@ func KillSessionArgs(session string) []string {
 	return []string{"kill-session", "-t", session}
 }
 
+// RenameSessionArgs builds the argument list for `tmux rename-session -t
+// <old> <new>`. Launcher.Launch creates a thread tmux session under a
+// cockpit-derived name (cxa-<handle>, stable from launch time, since codex
+// own thread id is not known until codex registers) and then, once codex
+// registers, renames it to cxa-<codexID> (SessionName(codexID)) so every
+// downstream consumer (attach, liveness, interrupt, quick-reply, archive)
+// that derives the session name from the thread id via SessionName keeps
+// resolving to the actual session (PRD #48: thread id is codex id).
+func RenameSessionArgs(oldSession, newSession string) []string {
+	return []string{"rename-session", "-t", oldSession, newSession}
+}
+
 // Runner executes a tmux subcommand given its argument list (as built by
 // NewSessionArgs/AttachArgs/SwitchClientArgs). Production code uses
 // ExecRunner; tests inject a fake so launch/attach orchestration can be

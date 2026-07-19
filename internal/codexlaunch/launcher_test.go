@@ -23,23 +23,58 @@ func (f *fakeTmuxRunner) Run(args []string) error {
 	return f.err
 }
 
+// fakeRegistrar scripts the codex thread id a Launch discovers for a given
+// worktree cwd. It returns the scripted ids in order, one per call, modeling
+// the post-launch registration (PRD #48: Launch blocks until the registrar
+// reports a registered id). A test that wants to exercise the
+// not-yet-registered-then-registered transition can prepend a "" to ids.
+type fakeRegistrar struct {
+	ids []string
+	i   int
+	t   *testing.T
+}
+
+func (f *fakeRegistrar) ThreadIDByCWD(string) (string, bool, error) {
+	if f.i >= len(f.ids) {
+		f.t.Fatalf("ran out of scripted registrar ids")
+	}
+	id := f.ids[f.i]
+	f.i++
+	if id == "" {
+		return "", false, nil
+	}
+	return id, true, nil
+}
+
+// alwaysNotRegistered is a Registrar stub that never reports a registered
+// thread, used to exercise the Launch registration-timeout path.
+type alwaysNotRegistered struct{}
+
+func (alwaysNotRegistered) ThreadIDByCWD(string) (string, bool, error) {
+	return "", false, nil
+}
+
 func newTestLauncher(t *testing.T, git GitRunner, tmux tmuxstatus.Runner, ids []string) (*Launcher, string) {
 	t.Helper()
 	statePath := filepath.Join(t.TempDir(), "state.json")
-	i := 0
-	next := func() string {
-		if i >= len(ids) {
-			t.Fatalf("ran out of scripted thread IDs")
-		}
-		id := ids[i]
-		i++
-		return id
+	// ids scripts the codex thread ids the fake Registrar returns (one per
+	// Launch). The cockpit handle (NewThreadID) is a separate, distinct
+	// value: it mints the tmux session name (cxa-<prefix>) and the
+	// notify-hook wrapper identity positional, but is NOT thread identity
+	// (PRD #48). Keeping them distinct lets tests assert that LaunchResult.
+	// ThreadID is codex id while the tmux session name still derives from
+	// the cockpit handle.
+	handleI := 0
+	nextHandle := func() string {
+		handleI++
+		return fmt.Sprintf("cockpit-handle-%d", handleI)
 	}
+	reg := &fakeRegistrar{ids: ids, t: t}
 	return &Launcher{
 		Git:         git,
 		Tmux:        tmux,
 		StatePath:   statePath,
-		NewThreadID: next,
+		NewThreadID: nextHandle,
 		// A deterministic, no-lookup executable path keeps tmux call
 		// assertions stable across machines/CI (os.Executable() would
 		// otherwise vary); CodexHome is left empty, meaning
@@ -52,6 +87,13 @@ func newTestLauncher(t *testing.T, git GitRunner, tmux tmuxstatus.Runner, ids []
 		// into exercising that behavior directly.
 		InspectPane: func(string) (tmuxstatus.PaneState, error) { return tmuxstatus.PaneState{Dead: false}, nil },
 		Sleep:       func(time.Duration) {},
+		// The fake Registrar returns the scripted codex id immediately, so
+		// Launch registration poll exits on the first check. RegSleep is a
+		// no-op so a test that scripts a not-yet-registered transition does
+		// not actually sleep.
+		Registrar:    reg,
+		RegSleep:     func(time.Duration) {},
+		PollInterval: time.Millisecond,
 	}, statePath
 }
 
@@ -99,12 +141,17 @@ func TestLaunch_GitRepo_CreatesWorktreeAndTmuxSessionAndState(t *testing.T) {
 		t.Fatalf("Launch: %v", err)
 	}
 
+	// PRD #48: LaunchResult.ThreadID is codex id (what the registrar
+	// returned), NOT the cockpit handle.
 	if res.ThreadID != "0123456789abcdef" {
-		t.Errorf("ThreadID = %q, want scripted id", res.ThreadID)
+		t.Errorf("ThreadID = %q, want codex id 0123456789abcdef", res.ThreadID)
 	}
+	// The tmux session name derives from the cockpit handle, not codex id.
+	// The session is renamed to derive from codex id after registration,
+	// so SessionName(codexID) resolves to the actual session everywhere.
 	wantSession := tmuxstatus.SessionName(res.ThreadID)
 	if res.SessionName != wantSession {
-		t.Errorf("SessionName = %q, want %q", res.SessionName, wantSession)
+		t.Errorf("SessionName = %q, want %q (renamed to codex id)", res.SessionName, wantSession)
 	}
 	wantDir := filepath.Join("/repo", ".worktrees", "fix-auth-hook")
 	if res.WorktreePath != wantDir {
@@ -114,27 +161,40 @@ func TestLaunch_GitRepo_CreatesWorktreeAndTmuxSessionAndState(t *testing.T) {
 		t.Errorf("Branch = %q, want fix-auth-hook", res.Branch)
 	}
 
-	if len(tmux.calls) != 1 {
-		t.Fatalf("expected exactly one tmux call, got %v", tmux.calls)
+	if len(tmux.calls) != 2 {
+		t.Fatalf("expected new-session + rename-session, got %v", tmux.calls)
 	}
 	got := tmux.calls[0]
-	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", res.ThreadID, notifyhook.DefaultEventsPath(statePath), nil)
+	// The notify-hook wrapper identity positional is the original
+	// (cockpit-handle-derived) session name baked into the launch command;
+	// runNotifyHook resolves it back to codex id at hook-fire time.
+	wantOriginalSession := tmuxstatus.SessionName("cockpit-handle-1")
+	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", wantOriginalSession, notifyhook.DefaultEventsPath(statePath), nil)
 	wantCodexArgs := NewThreadArgs(NewThreadSpec{Profile: "general-agentic", Task: "Fix auth hook", Notify: wantNotify})
-	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(wantSession, wantDir, wantCodexArgs))
+	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(wantOriginalSession, wantDir, wantCodexArgs))
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("tmux call = %v, want %v", got, want)
 	}
 	assertModifierKeysChainedBeforeNewSession(t, got)
+	// calls[1] renames the session to the codex-id-derived name.
+	wantRename := tmuxstatus.RenameSessionArgs(wantOriginalSession, wantSession)
+	if fmt.Sprint(tmux.calls[1]) != fmt.Sprint(wantRename) {
+		t.Errorf("rename call = %v, want %v", tmux.calls[1], wantRename)
+	}
 
 	st, err := agentstate.Load(statePath)
 	if err != nil {
 		t.Fatalf("Load state: %v", err)
 	}
+	// agentstate is keyed by codex id. TmuxSession stores the ORIGINAL
+	// (pre-rename) session name: it is the notify-hook resolution handle
+	// (runNotifyHook resolves it back to codex id), not the actual tmux
+	// session name (which was renamed to SessionName(codexID)).
 	entry, ok := st.Threads[res.ThreadID]
 	if !ok {
-		t.Fatalf("expected state entry for %s, got %v", res.ThreadID, st.Threads)
+		t.Fatalf("expected state entry keyed by codex id %s, got %v", res.ThreadID, st.Threads)
 	}
-	if entry.TmuxSession != wantSession || entry.Profile != "general-agentic" || entry.WorktreePath != wantDir {
+	if entry.TmuxSession != wantOriginalSession || entry.Profile != "general-agentic" || entry.WorktreePath != wantDir {
 		t.Errorf("state entry = %+v, unexpected", entry)
 	}
 }
@@ -177,10 +237,15 @@ func TestLaunch_ChainsExistingNotifyCommandFromProfileConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
+	// PRD #48: ThreadID is codex id, distinct from the cockpit handle.
+	if res.ThreadID != "threadid1" {
+		t.Errorf("ThreadID = %q, want codex id threadid1", res.ThreadID)
+	}
 
-	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", res.ThreadID, notifyhook.DefaultEventsPath(statePath), []string{"/usr/bin/terminal-notifier", "-title", "codex"})
+	wantSession := tmuxstatus.SessionName("cockpit-handle-1")
+	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", wantSession, notifyhook.DefaultEventsPath(statePath), []string{"/usr/bin/terminal-notifier", "-title", "codex"})
 	wantCodexArgs := NewThreadArgs(NewThreadSpec{Profile: "general-agentic", Task: "do a thing", Notify: wantNotify})
-	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(tmuxstatus.SessionName(res.ThreadID), "/plain", wantCodexArgs))
+	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(wantSession, "/plain", wantCodexArgs))
 	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {
 		t.Errorf("tmux call = %v, want %v (expected the profile's existing notify command chained in)", tmux.calls[0], want)
 	}
@@ -311,7 +376,9 @@ func TestLaunch_ReturnsErrorAndDoesNotWriteState_WhenPaneDiesImmediately(t *test
 	if len(tmux.calls) != 2 {
 		t.Fatalf("expected new-session + a cleanup kill-session call, got %v", tmux.calls)
 	}
-	wantSession := tmuxstatus.SessionName("threadid1")
+	// The session name derives from the cockpit handle, not codex id (the
+	// pane dies before the registration poll discovers codex id).
+	wantSession := tmuxstatus.SessionName("cockpit-handle-1")
 	wantCleanup := tmuxstatus.KillSessionArgs(wantSession)
 	if fmt.Sprint(tmux.calls[1]) != fmt.Sprint(wantCleanup) {
 		t.Errorf("cleanup call = %v, want %v", tmux.calls[1], wantCleanup)
@@ -450,15 +517,21 @@ func TestLaunch_InPlaceModeOnGitDirRunsInCallerCwd(t *testing.T) {
 	if res.Branch != "" {
 		t.Errorf("Branch = %q, want empty for in-place run", res.Branch)
 	}
-	if len(tmux.calls) != 1 {
-		t.Fatalf("expected exactly one tmux call, got %v", tmux.calls)
+	if len(tmux.calls) != 2 {
+		t.Fatalf("expected new-session + rename-session, got %v", tmux.calls)
 	}
-	wantSession := tmuxstatus.SessionName(res.ThreadID)
-	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", res.ThreadID, notifyhook.DefaultEventsPath(statePath), nil)
+	// The new-session call uses the original (cockpit-handle-derived) name.
+	wantSession := tmuxstatus.SessionName("cockpit-handle-1")
+	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", wantSession, notifyhook.DefaultEventsPath(statePath), nil)
 	wantCodexArgs := NewThreadArgs(NewThreadSpec{Profile: "general-agentic", Task: "explore the graph", Notify: wantNotify})
 	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(wantSession, "/repo/sub", wantCodexArgs))
 	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {
 		t.Errorf("tmux call = %v, want %v", tmux.calls[0], want)
+	}
+	// The rename-session call moves it to the codex-id-derived name.
+	wantRename := tmuxstatus.RenameSessionArgs(wantSession, tmuxstatus.SessionName(res.ThreadID))
+	if fmt.Sprint(tmux.calls[1]) != fmt.Sprint(wantRename) {
+		t.Errorf("rename call = %v, want %v", tmux.calls[1], wantRename)
 	}
 }
 
@@ -484,5 +557,81 @@ func TestLaunch_WorktreeModeOnGitDirCreatesWorktree(t *testing.T) {
 	}
 	if res.Branch != "explore-the-graph" {
 		t.Errorf("Branch = %q, want explore-the-graph", res.Branch)
+	}
+}
+
+// TestLaunch_RegistersAfterPoll_ReturnsCodexID exercises the PRD #48
+// registration poll: the registrar reports not-registered on the first check
+// (codex hasn't written its row yet) then registered on the second, and
+// Launch returns codex id (not the cockpit handle). This pins the poll loop
+// shape (check first, then sleep) and the id-source-of-truth contract.
+func TestLaunch_RegistersAfterPoll_ReturnsCodexID(t *testing.T) {
+	git := &fakeGitRunner{responses: map[string]fakeGitResponse{
+		"[rev-parse --show-toplevel]": {err: fmt.Errorf("not a repo")},
+	}}
+	tmux := &fakeTmuxRunner{}
+	l, statePath := newTestLauncher(t, git, tmux, []string{"", "codex-id-xyz"})
+	l.RegistrationWait = time.Second
+
+	res, err := l.Launch(LaunchRequest{StartDir: "/plain", Task: "do a thing"})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if res.ThreadID != "codex-id-xyz" {
+		t.Errorf("ThreadID = %q, want codex-id-xyz (discovered after poll)", res.ThreadID)
+	}
+	if res.SessionName != tmuxstatus.SessionName("codex-id-xyz") {
+		t.Errorf("SessionName = %q, want codex-id-derived session (renamed after registration)", res.SessionName)
+	}
+	// agentstate is keyed by codex id, not the cockpit handle.
+	st, err := agentstate.Load(statePath)
+	if err != nil {
+		t.Fatalf("Load state: %v", err)
+	}
+	if _, ok := st.Threads["codex-id-xyz"]; !ok {
+		t.Errorf("expected state entry keyed by codex id codex-id-xyz, got %v", st.Threads)
+	}
+	if _, ok := st.Threads["cockpit-handle-1"]; ok {
+		t.Errorf("expected NO state entry keyed by the cockpit handle, got %v", st.Threads)
+	}
+}
+
+// TestLaunch_RegistrationTimeout_KillsSessionAndReturnsError pins the PRD
+// #48 timeout path: when codex never registers within RegistrationWait,
+// Launch kills the tmux session and returns ErrRegistrationTimeout, writing
+// no state.json entry (so no orphaned optimistic row).
+func TestLaunch_RegistrationTimeout_KillsSessionAndReturnsError(t *testing.T) {
+	git := &fakeGitRunner{responses: map[string]fakeGitResponse{
+		"[rev-parse --show-toplevel]": {err: fmt.Errorf("not a repo")},
+	}}
+	tmux := &fakeTmuxRunner{}
+	l, statePath := newTestLauncher(t, git, tmux, nil)
+	// A registrar that always reports not-registered, so Launch exhausts
+	// its RegistrationWait and times out.
+	l.Registrar = alwaysNotRegistered{}
+	l.RegistrationWait = 5 * time.Millisecond
+
+	_, err := l.Launch(LaunchRequest{StartDir: "/plain", Task: "do a thing"})
+	if err == nil || !strings.Contains(err.Error(), "register") {
+		t.Fatalf("expected a registration timeout error, got %v", err)
+	}
+
+	// The tmux session is killed on timeout (new-session + kill-session).
+	if len(tmux.calls) != 2 {
+		t.Fatalf("expected new-session + a cleanup kill-session call, got %v", tmux.calls)
+	}
+	wantSession := tmuxstatus.SessionName("cockpit-handle-1")
+	wantCleanup := tmuxstatus.KillSessionArgs(wantSession)
+	if fmt.Sprint(tmux.calls[1]) != fmt.Sprint(wantCleanup) {
+		t.Errorf("cleanup call = %v, want %v", tmux.calls[1], wantCleanup)
+	}
+
+	// No state.json entry is written on timeout.
+	st, loadErr := agentstate.Load(statePath)
+	if loadErr != nil {
+		t.Fatalf("Load state: %v", loadErr)
+	}
+	if len(st.Threads) != 0 {
+		t.Fatalf("expected no state entries after a registration timeout, got %v", st.Threads)
 	}
 }

@@ -223,3 +223,50 @@ func TestDefaultPath_UnderCodexAgentsHome(t *testing.T) {
 		t.Fatalf("DefaultPath() = %q, want %q", path, want)
 	}
 }
+
+// TestFindThreadIDBySession_ResolvesCodexID is the PRD #48 notify-hook
+// resolution pin: the wrapper identity positional is the tmux session name
+// (stable from launch time), and the hook resolves it back to codex thread
+// id (the agentstate entry's key) via the entry's TmuxSession field. This
+// keys events.jsonl and LastTurnEvent by codex id without a launch-time
+// dependency on registration.
+func TestFindThreadIDBySession_ResolvesCodexID(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	if err := Upsert(statePath, "codex-id-1", Entry{TmuxSession: "cxa-cockpit", Profile: "general-agentic"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	id, ok, err := FindThreadIDBySession(statePath, "cxa-cockpit")
+	if err != nil {
+		t.Fatalf("FindThreadIDBySession: %v", err)
+	}
+	if !ok || id != "codex-id-1" {
+		t.Errorf("got id=%q ok=%v, want codex-id-1/true", id, ok)
+	}
+}
+
+func TestFindThreadIDBySession_NotFoundReturnsFalse(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	if err := Upsert(statePath, "codex-id-1", Entry{TmuxSession: "cxa-cockpit"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	id, ok, err := FindThreadIDBySession(statePath, "cxa-other")
+	if err != nil {
+		t.Fatalf("FindThreadIDBySession: %v", err)
+	}
+	if ok {
+		t.Errorf("expected not found, got id=%q", id)
+	}
+}
+
+func TestFindThreadIDBySession_MissingFileIsNotFound(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	id, ok, err := FindThreadIDBySession(statePath, "cxa-anything")
+	if err != nil {
+		t.Fatalf("expected no error on a missing state file, got %v", err)
+	}
+	if ok {
+		t.Errorf("expected not found when no state file exists, got id=%q", id)
+	}
+}

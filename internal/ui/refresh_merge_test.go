@@ -105,3 +105,42 @@ func rowIDs(m Model) []string {
 	}
 	return ids
 }
+
+// TestUpdate_RowsRefreshedMsg_LaunchedRowKeyedByCodexIDIsNotDuplicated is
+// the PRD #48 / issue #47 regression pin: when the optimistic launch row
+// and the refreshed rows share codex thread id (because Launcher.Launch
+// now returns codex id, not a cockpit-minted UUID), the merge keeps exactly
+// one row for that id. The pre-#48 bug minted a cockpit UUID for the
+// optimistic row while codex wrote its own id, so the merge saw two
+// distinct ids and kept both (the duplicate-row repro). With Launch
+// returning codex id, the duplicate collapses by construction — this test
+// codifies that.
+func TestUpdate_RowsRefreshedMsg_LaunchedRowKeyedByCodexIDIsNotDuplicated(t *testing.T) {
+	codexID := "codex-thread-abc123"
+	m := newFixtureModel()
+	// The optimistic row is keyed by codex id (Launch blocks until codex
+	// registers, then returns codex id).
+	m = send(m, ThreadLaunchedMsg{Row: Row{
+		Thread: codexstate.Thread{ID: codexID, Title: "Build the thing"},
+		Status: tmuxstatus.StatusWorking,
+	}})
+	// The refresh carries codex's own row for the same id (codex has now
+	// persisted it).
+	m = send(m, RowsRefreshedMsg{Rows: []Row{{
+		Thread: codexstate.Thread{ID: codexID, Title: "Build the thing"},
+		Status: tmuxstatus.StatusWorking,
+	}}})
+
+	count := 0
+	for _, r := range m.rows {
+		if r.Thread.ID == codexID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one row for codex id %s after refresh, got %d: %v", codexID, count, rowIDs(m))
+	}
+	if !hasRow(m, codexID) {
+		t.Fatalf("expected the codex-id row to survive, got rows: %v", rowIDs(m))
+	}
+}

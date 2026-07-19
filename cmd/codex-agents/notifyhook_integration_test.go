@@ -14,11 +14,16 @@ import (
 
 // TestNotifyHookSubcommand_EndToEnd builds the real codex-agents binary and
 // invokes it exactly as codex would per internal/notifyhook.WrapperArgs:
-// `codex-agents notify-hook <threadID> <eventsPath> <forwardJoined>
-// <payload>`. This exercises main()'s hidden-subcommand dispatch
-// end-to-end (PRD #1's testing decisions call for an integration test
-// covering launch -> status transitions; this is the notify-hook half of
-// that loop, without needing a real codex/tmux).
+// `codex-agents notify-hook <session> <eventsPath> <forwardJoined>
+// <payload>`. The wrapper identity positional is the tmux session name
+// (PRD #48: stable from launch time, since codex thread id is not known
+// until codex registers). runNotifyHook resolves the session name back to
+// codex thread id via agentstate before recording the event, so events.jsonl
+// and state.json end up keyed by codex id. This exercises main()'s
+// hidden-subcommand dispatch + resolution end-to-end (PRD #1's testing
+// decisions call for an integration test covering launch -> status
+// transitions; this is the notify-hook half of that loop, without needing a
+// real codex/tmux).
 func TestNotifyHookSubcommand_EndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping go-build-based integration test in -short mode")
@@ -34,11 +39,13 @@ func TestNotifyHookSubcommand_EndToEnd(t *testing.T) {
 	home := t.TempDir()
 	eventsPath := filepath.Join(home, "events.jsonl")
 	statePath := filepath.Join(home, ".codex-agents", "state.json")
-	if err := agentstate.Upsert(statePath, "thread-1", agentstate.Entry{TmuxSession: "cxa-thread-1", Profile: "general-agentic"}); err != nil {
+	if err := agentstate.Upsert(statePath, "codex-thread-1", agentstate.Entry{TmuxSession: "cxa-thread-1", Profile: "general-agentic"}); err != nil {
 		t.Fatalf("seed state: %v", err)
 	}
 
-	cmd := exec.Command(binPath, "notify-hook", "thread-1", eventsPath, "", `{"type":"agent-turn-complete"}`)
+	// The hook is invoked with the tmux session name as the identity
+	// positional (what Launcher.Launch configured via WrapperArgs).
+	cmd := exec.Command(binPath, "notify-hook", "cxa-thread-1", eventsPath, "", `{"type":"agent-turn-complete"}`)
 	cmd.Env = append(os.Environ(), "HOME="+home)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -62,17 +69,19 @@ func TestNotifyHookSubcommand_EndToEnd(t *testing.T) {
 	if err := json.Unmarshal([]byte(line), &ev); err != nil {
 		t.Fatalf("parse recorded event %q: %v", line, err)
 	}
-	if ev.ThreadID != "thread-1" || ev.Kind != "turn-ended" {
-		t.Fatalf("recorded event = %+v, want thread-1/turn-ended", ev)
+	// The event is keyed by codex id (resolved from the session name),
+	// not the session name positional.
+	if ev.ThreadID != "codex-thread-1" || ev.Kind != "turn-ended" {
+		t.Fatalf("recorded event = %+v, want codex-thread-1/turn-ended", ev)
 	}
 
 	st, err := agentstate.Load(statePath)
 	if err != nil {
 		t.Fatalf("load state: %v", err)
 	}
-	entry := st.Threads["thread-1"]
+	entry := st.Threads["codex-thread-1"]
 	if entry.LastTurnEvent == "" {
-		t.Fatalf("expected LastTurnEvent to be populated, got %+v", entry)
+		t.Fatalf("expected LastTurnEvent populated for codex-thread-1, got %+v", entry)
 	}
 	if entry.TmuxSession != "cxa-thread-1" {
 		t.Fatalf("expected TmuxSession preserved, got %+v", entry)
