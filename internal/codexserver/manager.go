@@ -205,7 +205,7 @@ func (m *Manager) Start() error {
 		},
 	}, &initResult); err != nil {
 		// Handshake failed — kill the process and degrade. Don't
-		// return the raw error path verbatim: callers (cmd/codex-agents)
+		// return the raw error path verbatim: callers (cmd/cdxa)
 		// already log the manager's availability state, so the
 		// returned error is for debugging only.
 		m.markUnavailable()

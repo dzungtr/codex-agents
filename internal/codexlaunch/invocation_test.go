@@ -46,11 +46,11 @@ func TestNewThreadArgs_NotifyAppendsConfigFlagBeforeTask(t *testing.T) {
 	got := NewThreadArgs(NewThreadSpec{
 		Profile: "general-agentic",
 		Task:    "fix the auth hook",
-		Notify:  []string{"/bin/codex-agents", "notify-hook", "t1", "/home/x/.codex-agents/events.jsonl", ""},
+		Notify:  []string{"/bin/cdxa", "notify-hook", "t1", "/home/x/.codex-agents/events.jsonl", ""},
 	})
 	want := []string{
 		"codex", "-p", "general-agentic",
-		"-c", `notify=["/bin/codex-agents","notify-hook","t1","/home/x/.codex-agents/events.jsonl",""]`,
+		"-c", `notify=["/bin/cdxa","notify-hook","t1","/home/x/.codex-agents/events.jsonl",""]`,
 		"fix the auth hook",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -63,12 +63,12 @@ func TestNewThreadArgs_ModelAndNotifyBothLayerOnTop(t *testing.T) {
 		Profile: "general-agentic",
 		Model:   "o3",
 		Task:    "fix the auth hook",
-		Notify:  []string{"/bin/codex-agents", "notify-hook", "t1", "/events.jsonl", ""},
+		Notify:  []string{"/bin/cdxa", "notify-hook", "t1", "/events.jsonl", ""},
 	})
 	want := []string{
 		"codex", "-p", "general-agentic",
 		"-c", "model=o3",
-		"-c", `notify=["/bin/codex-agents","notify-hook","t1","/events.jsonl",""]`,
+		"-c", `notify=["/bin/cdxa","notify-hook","t1","/events.jsonl",""]`,
 		"fix the auth hook",
 	}
 	if !reflect.DeepEqual(got, want) {

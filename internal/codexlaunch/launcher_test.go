@@ -87,7 +87,7 @@ func newTestLauncher(t *testing.T, git GitRunner, tmux tmuxstatus.Runner, ids []
 		// otherwise vary); CodexHome is left empty, meaning
 		// ExistingNotifyCommand always returns nil, so notify wrapper args
 		// never include a forward command unless a test opts in.
-		ExecutablePath: func() (string, error) { return "/opt/codex-agents/codex-agents", nil },
+		ExecutablePath: func() (string, error) { return "/opt/cdxa/cdxa", nil },
 		// A fake InspectPane reporting "always alive" plus a no-op Sleep
 		// decouples the rest of this suite from the post-launch liveness
 		// poll (and from needing a real tmux server) unless a test opts
@@ -191,7 +191,7 @@ func TestLaunch_GitRepo_CreatesWorktreeAndTmuxSessionAndState(t *testing.T) {
 	// (cockpit-handle-derived) session name baked into the launch command;
 	// runNotifyHook resolves it back to codex id at hook-fire time.
 	wantOriginalSession := tmuxstatus.SessionName("cockpit-handle-1")
-	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", wantOriginalSession, notifyhook.DefaultEventsPath(statePath), nil)
+	wantNotify := notifyhook.WrapperArgs("/opt/cdxa/cdxa", wantOriginalSession, notifyhook.DefaultEventsPath(statePath), nil)
 	wantCodexArgs := NewThreadArgs(NewThreadSpec{Profile: "general-agentic", Task: "Fix auth hook", Notify: wantNotify})
 	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(wantOriginalSession, wantDir, wantCodexArgs))
 	if fmt.Sprint(got) != fmt.Sprint(want) {
@@ -265,7 +265,7 @@ func TestLaunch_ChainsExistingNotifyCommandFromProfileConfig(t *testing.T) {
 	}
 
 	wantSession := tmuxstatus.SessionName("cockpit-handle-1")
-	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", wantSession, notifyhook.DefaultEventsPath(statePath), []string{"/usr/bin/terminal-notifier", "-title", "codex"})
+	wantNotify := notifyhook.WrapperArgs("/opt/cdxa/cdxa", wantSession, notifyhook.DefaultEventsPath(statePath), []string{"/usr/bin/terminal-notifier", "-title", "codex"})
 	wantCodexArgs := NewThreadArgs(NewThreadSpec{Profile: "general-agentic", Task: "do a thing", Notify: wantNotify})
 	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(wantSession, "/plain", wantCodexArgs))
 	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {
@@ -544,7 +544,7 @@ func TestLaunch_InPlaceModeOnGitDirRunsInCallerCwd(t *testing.T) {
 	}
 	// The new-session call uses the original (cockpit-handle-derived) name.
 	wantSession := tmuxstatus.SessionName("cockpit-handle-1")
-	wantNotify := notifyhook.WrapperArgs("/opt/codex-agents/codex-agents", wantSession, notifyhook.DefaultEventsPath(statePath), nil)
+	wantNotify := notifyhook.WrapperArgs("/opt/cdxa/cdxa", wantSession, notifyhook.DefaultEventsPath(statePath), nil)
 	wantCodexArgs := NewThreadArgs(NewThreadSpec{Profile: "general-agentic", Task: "explore the graph", Notify: wantNotify})
 	want := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(wantSession, "/repo/sub", wantCodexArgs))
 	if fmt.Sprint(tmux.calls[0]) != fmt.Sprint(want) {

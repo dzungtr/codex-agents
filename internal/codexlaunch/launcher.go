@@ -95,7 +95,7 @@ type Launcher struct {
 	// the notify wrapper can forward to it (PRD #1 / issue #4). Empty
 	// skips the lookup — the wrapper then only records turn-ended events.
 	CodexHome string
-	// ExecutablePath resolves the codex-agents binary's own path, used to
+	// ExecutablePath resolves the cdxa binary's own path, used to
 	// configure it as codex's notify hook (re-invoked in hook mode; see
 	// internal/notifyhook). Defaults to os.Executable; tests override for
 	// determinism. If resolution fails, Launch degrades gracefully by

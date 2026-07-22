@@ -2,9 +2,9 @@
 // $CODEX_HOME thread data (codexstate), tmux liveness (tmuxstatus), and the
 // cockpit's own state.json (agentstate) on one side, and the bubbletea
 // model/view/update in internal/ui on the other. It used to live in
-// cmd/codex-agents/main.go; extracted here so a future merged cdxa binary
-// (ADR 0005) can call Run(codexHome, statePath) without dragging in any
-// cmd/ plumbing.
+// cmd/codex-agents/main.go (deleted in slice #77 of the unified-binary
+// initiative, ADR 0005); the merged cdxa binary calls Run(codexHome,
+// statePath) without dragging in any cmd/ plumbing.
 package cockpit
 
 import (
@@ -549,13 +549,3 @@ func refreshAction(codexHome, statePath string) func() tea.Cmd {
 	}
 }
 
-// ResolveCodexHome honors $CODEX_HOME (as codex's own CLI does) before
-// falling back to the default ~/.codex. Exposed so cmd-layer shims
-// (cmd/codex-agents today, cmd/cdxa after the ADR 0005 merge) resolve the
-// same path the cockpit would, then pass it to Run.
-func ResolveCodexHome() (string, error) {
-	if home := os.Getenv("CODEX_HOME"); home != "" {
-		return home, nil
-	}
-	return codexstate.DefaultCodexHome()
-}

@@ -1,10 +1,8 @@
-// Notify-hook dispatch for the merged cdxa binary (slice #76). This file
-// moves runNotifyHook out of cmd/codex-agents (the transition shim lives
-// until slice #77 deletes that command) and into cmd/cdxa, where the
-// dispatch table that calls it now lives. The hidden subcommand keeps its
-// stderr-only / exit-0 / never-blocks-codex contract - only the dispatch
-// mechanism changes, from a hardcoded `if` in the old main to an entry in
-// the cmds map in this package.
+// Notify-hook dispatch for the merged cdxa binary (slice #76, completed
+// in #77 by deleting the cmd/codex-agents transition shim). The hidden
+// subcommand keeps its stderr-only / exit-0 / never-blocks-codex contract
+// - only the dispatch mechanism changes, from a hardcoded `if` in the old
+// main to an entry in the cmds map in this package.
 package main
 
 import (
