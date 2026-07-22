@@ -113,11 +113,14 @@ func newTestLauncher(t *testing.T, git GitRunner, tmux tmuxstatus.Runner, ids []
 // guards the tmux-256color pane problem reported in #78 / #25 Bug 3:
 // codex runs under TERM=tmux-256color inside the pane, so xterm* alone
 // leaves the outer pane's extkeys capability un-advertised and the app
-// silently misses modified-key sequences.
+// silently misses modified-key sequences. The focus-events on line is
+// the slice-2 invariant (PRD #79 / #81) that lets switch-client into a
+// thread pane trigger an immediate TUI redraw of the working spinner
+// instead of waiting for the next user interaction.
 func assertModifierKeysChainedBeforeNewSession(t *testing.T, got []string) {
 	t.Helper()
 	joined := " " + strings.Join(got, " ") + " "
-	for _, opt := range []string{"xterm-keys on", "extended-keys on", "terminal-features"} {
+	for _, opt := range []string{"xterm-keys on", "extended-keys on", "terminal-features", "focus-events on"} {
 		if !strings.Contains(joined, " "+opt) {
 			t.Errorf("tmux call missing modifier-key setup %q, got %v", opt, got)
 		}

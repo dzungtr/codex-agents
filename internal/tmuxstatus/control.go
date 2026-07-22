@@ -237,17 +237,29 @@ const extendedKeysVersionGuard = `#{m/r:^(3\.[2-9]|[4-9]\.|[1-9][0-9]+\.),#{vers
 //   - `set-option -g extended-keys on` (tmux 3.2+): enables the
 //     extended-keys (CSI u / kitty keyboard protocol) path, which is what
 //     unambiguously encodes combos like Shift+Enter.
-//   - `set-option -as terminal-features ,xterm*:extkeys,tmux*:extkeys` (tmux 3.2+):
+//   - `set-option -g terminal-features ,xterm*:extkeys,tmux*:extkeys` (tmux 3.2+):
 //     advertises the extkeys capability to panes whose outer TERM matches
 //     xterm* or tmux* so the application knows it may emit/expect extended
 //     keys. The tmux* arm is required because codex runs inside the pane
 //     with TERM=tmux-256color — without it, the pane never advertises
 //     extkeys to its child and modified-key sequences are silently dropped
-//     (#78 / #25 Bug 3).
+//     (#78 / #25 Bug 3). `-g` (not `-as`) is deliberate: each Launch/Resume
+//     chain would otherwise append another copy of the list to the live
+//     server's user-level option, growing N identical `xterm*:extkeys`
+//     entries across repeated invocations; `-g` writes a deterministic
+//     user-level value that replaces any prior state with the cockpit's
+//     intended default. Users who customize `terminal-features` should put
+//     those in `~/.tmux.conf`, which re-applies after this chain by design.
+//   - `set-option -g focus-events on`: turns on tmux's focus-in/focus-out
+//     event reporting. Without this, `switch-client` into a thread pane
+//     does not trigger a TUI redraw in codex; the "working" spinner /
+//     status text is not displayed until the next user interaction forces
+//     one. Available since tmux 1.8 — no version guard needed.
 //
 // The two extended-keys lines run under `if-shell -F` version guards so
 // they no-op cleanly on tmux < 3.2 instead of erroring out the whole
-// invocation; the xterm-keys baseline is version-safe everywhere.
+// invocation; the xterm-keys baseline and the focus-events line are
+// version-safe everywhere.
 //
 // This must be applied via ChainArgs together with the NewSessionArgs it
 // guards, in a single tmux invocation, placed before NewSessionArgs so
@@ -264,7 +276,9 @@ func ModifierKeysArgs() []string {
 		"set-option -g extended-keys on",
 		";",
 		"if-shell", "-F", extendedKeysVersionGuard,
-		"set-option -as terminal-features ,xterm*:extkeys,tmux*:extkeys",
+		"set-option -g terminal-features ,xterm*:extkeys,tmux*:extkeys",
+		";",
+		"set-option", "-g", "focus-events", "on",
 	}
 }
 
