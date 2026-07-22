@@ -1,11 +1,11 @@
 # cdxa
 
-A single binary that is both a terminal cockpit for running several
-[codex](https://github.com/openai/codex) agents in parallel and a headless CLI
+A single binary that is both a **terminal cockpit** for running several
+[codex](https://github.com/openai/codex) agents in parallel and a **headless CLI**
 for codex thread delegation. Launched without a subcommand, `cdxa` opens the
 cockpit TUI; with a subcommand (`spawn`, `output`, `send`, `skills`), it performs
-headless JSON-only work (ADR 0005). The cockpit is *only* a list view — the
-conversation experience is codex's own TUI, unmodified.
+headless JSON-only work. The cockpit is *only* a list view — the conversation
+experience is codex's own TUI, unmodified.
 
 ![codex-agents cockpit: list of codex threads in the terminal](assets/cdxa-preview.png)
 
@@ -16,50 +16,50 @@ place to see every conversation, no visibility into which agent is blocked waiti
 no safe way to launch parallel agents in one checkout, and no way to jump back into an old
 session from a global view. `codex resume`'s picker is per-invocation and cwd-scoped.
 
-`codex-agents` derives a list of every codex thread (running, waiting, or finished) straight
-from codex's own records, so every conversation shows up — not just ones launched from the
-cockpit — with the threads that need your input surfaced at the top.
+`cdxa` derives a list of every codex thread (running, waiting, or finished) straight from
+codex's own records, so every conversation shows up — not just ones launched from the cockpit
+— with the threads that need your input surfaced at the top.
 
 ## Prerequisites
 
 - Go 1.25+
-- [tmux](https://github.com/tmux/tmux) installed and on `$PATH` — every cockpit-launched
-  thread runs inside a detached tmux session on the **default tmux socket**, so a tmux
-  server must already be running outside the terminal's cgroup. Otherwise closing the
-  launching terminal kills every spawned thread (see
-  [#69](https://github.com/dzungtr/codex-agents/issues/69)). On systemd-logind hosts
-  (Fedora, etc.) run tmux as a `systemd --user` service so its `KillMode=process` cgroup
-  outlives the originating terminal:
-
-  ```ini
-  # ~/.config/systemd/user/tmux-server.service
-  [Unit]
-  Description=Persistent tmux server for codex-agents threads
-  After=default.target
-
-  [Service]
-  Type=forking
-  ExecStart=/usr/bin/tmux -f /dev/null start-server \; set-option -g exit-empty off
-  ExecStop=-/usr/bin/tmux kill-server
-  RemainAfterExit=yes
-  KillMode=process
-
-  [Install]
-  WantedBy=default.target
-  ```
-
-  ```sh
-  systemctl --user daemon-reload
-  systemctl --user enable --now tmux-server.service
-  loginctl enable-linger $USER
-  ```
-
-  `exit-empty off` is what keeps the server alive after the last session detaches —
-  without it the daemon exits as soon as it has no clients, and the next launch starts a
-  fresh, terminal-scoped server. `loginctl enable-linger` keeps the user service alive
-  across logout. The cockpit never starts a tmux server of its own; whatever server owns
-  the default socket when the cockpit launches is what the spawned sessions attach to.
+- [tmux](https://github.com/tmux/tmux) installed and on `$PATH`
 - A working `codex` CLI installation with state under `$CODEX_HOME` (default `~/.codex`)
+
+Every cockpit-launched thread runs inside a detached tmux session on the **default tmux
+socket**, so a tmux server must already be running outside the terminal's cgroup. Otherwise
+closing the launching terminal kills every spawned thread (see
+[#69](https://github.com/dzungtr/codex-agents/issues/69)). On systemd-logind hosts (Fedora,
+etc.) run tmux as a `systemd --user` service so its `KillMode=process` cgroup outlives the
+originating terminal:
+
+```ini
+# ~/.config/systemd/user/tmux-server.service
+[Unit]
+Description=Persistent tmux server for cdxa threads
+After=default.target
+
+[Service]
+Type=forking
+ExecStart=/usr/bin/tmux -f /dev/null start-server \; set-option -g exit-empty off
+ExecStop=-/usr/bin/tmux kill-server
+RemainAfterExit=yes
+KillMode=process
+
+[Install]
+WantedBy=default.target
+```
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now tmux-server.service
+loginctl enable-linger $USER
+```
+
+`exit-empty off` is what keeps the server alive after the last session detaches. `loginctl
+enable-linger` keeps the user service alive across logout. The cockpit never starts a tmux
+server of its own; whatever server owns the default socket when the cockpit launches is what
+the spawned sessions attach to.
 
 ## Build / run
 
@@ -68,17 +68,18 @@ go build ./cmd/cdxa
 ./cdxa
 ```
 
-or, without a separate build step:
+Or without a separate build step:
 
 ```sh
 go run ./cmd/cdxa
 ```
 
-Run it from the directory you want new threads launched into — the composer starts threads in
-that directory (in a per-thread git worktree, if it's a git repo), while the list itself shows
-threads across all projects. `$CODEX_HOME` is honored if set, otherwise `~/.codex` is used.
+Run from the directory you want new threads launched into — the composer starts threads in
+that directory (in a per-thread git worktree, if it's a git repo), while the list itself
+shows threads across all projects. `$CODEX_HOME` is honored if set, otherwise `~/.codex` is
+used.
 
-To use a headless subcommand instead of the cockpit TUI:
+## Headless delegation (`cdxa` subcommands)
 
 ```sh
 cdxa spawn "task" --workspace inplace
@@ -87,47 +88,63 @@ cdxa send <thread-id> "follow-up"
 cdxa skills cdxa-spawn --agent codex
 ```
 
-## Keybinds
+A codex thread can delegate work to another codex thread via these subcommands. All
+subcommand stdout is JSON-only with a frozen exit-code mapping; the vocabulary (thread,
+subthread, turn, leaf thread) is defined in [`CONTEXT.md`](CONTEXT.md).
+
+## Cockpit keybinds
 
 | Key | Action |
 |---|---|
 | `↑`/`k`, `↓`/`j` | Move selection |
-| `enter` | Attach an alive thread's tmux session, or resume (`codex resume <id>`) and attach a closed one |
-| `i` | Focus the composer to launch a new thread (`@` swaps profile, `enter` launches, `esc` cancels) |
-| `r` | Quick-reply to the selected alive thread (`enter` sends, `esc` cancels); no-op on closed threads |
+| `enter` | Attach an alive thread's tmux session, or resume and attach a closed one |
+| `i` | Focus the composer to launch a new thread |
+| `r` | Quick-reply to the selected alive thread |
 | `x` | Interrupt the selected thread's current turn (thread moves to **waiting**) |
-| `a` | Archive: kill the tmux session, hide the thread from the list, and offer worktree removal (refuses if there's uncommitted or unpushed work) |
+| `a` | Archive: kill the tmux session, hide the thread, offer worktree removal |
 | `/` | Filter the list by title, repo, or branch |
 | `?` | Toggle the help overlay |
 | `q` / `ctrl+c` | Quit |
 
-Detaching from an attached thread's tmux session (the usual tmux detach chord, e.g. `ctrl+b d`)
-returns you to the cockpit with a refreshed list.
+Detaching from an attached thread's tmux session (the usual tmux detach chord, e.g.
+`ctrl+b d`) returns you to the cockpit with a refreshed list.
 
 Threads move through three statuses, derived rather than self-reported: **working** (tmux
 session alive, turn in progress) → **waiting** (tmux session alive, turn ended — needs you) →
 **closed** (no tmux session). The list orders waiting → working → closed, most-recent first
 within each group — ordering is the attention mechanism; there are no desktop notifications.
 
-## Architecture
+## Documentation
 
-See [`docs/adr/0001-codex-agents-cockpit-architecture.md`](docs/adr/0001-codex-agents-cockpit-architecture.md) (cockpit architecture) and [`docs/adr/0005-unified-cdxa-binary.md`](docs/adr/0005-unified-cdxa-binary.md) (unified binary)
-for the full architectural contract (stack, read-only sqlite state source, tmux-per-thread
-process model, worktree-per-thread launch semantics, status derivation) and measured results.
-The original problem/solution/user-story writeup lives in
-[PRD issue #1](https://github.com/dzungtr/codex-agents/issues/1).
+All architectural decisions, design records, and reference material live in the
+[`docs/`](docs/) folder:
 
-## Headless delegation (`cdxa` subcommands)
+```
+docs/
+├── adr/
+│   ├── 0001-codex-agents-cockpit-architecture.md
+│   ├── 0002-codex-server-live-update.md
+│   ├── 0003-cdxa-subthread-cli.md
+│   ├── 0004-cdxa-skills-command.md
+│   └── 0005-unified-cdxa-binary.md
+└── cdxa-subthread-cookbook.md
+```
 
-A codex thread can delegate work to another codex thread via `cdxa`'s
-headless subcommands (`spawn`, `output`, `send`, `skills`). The architectural
-contract — JSON-only stdout and a frozen exit-code mapping — is
-[ADR 0003](docs/adr/0003-cdxa-subthread-cli.md); the unified-binary
-decision (subcommand dispatch before bubbletea init) is
-[ADR 0005](docs/adr/0005-unified-cdxa-binary.md); vocabulary (thread,
-subthread, turn) is in [`CONTEXT.md`](CONTEXT.md).
+The docs are indexed for semantic search via [memsearch](https://crates.io/crates/memsearch)
+(collection `codex_agents`, configured in [`.memsearch.toml`](.memsearch.toml)). To find
+documentation relevant to a topic, run:
 
-For copy-pasteable parent-thread prompt patterns — poll loops, turn
-tracking, send-then-collect refinement, `--wait` blocking, and workspace
-selection — see the
-[cdxa subthread delegation cookbook](docs/cdxa-subthread-cookbook.md).
+```sh
+memsearch search "your topic" -c codex_agents --top-k 5
+```
+
+For example:
+
+```sh
+memsearch search "subthread delegation" -c codex_agents --top-k 5
+memsearch search "unified binary" -c codex_agents --top-k 5
+memsearch search "worktree launch" -c codex_agents --top-k 5
+```
+
+The vocabulary (thread, subthread, turn, leaf thread, prompt envelope) is defined in
+[`CONTEXT.md`](CONTEXT.md).
