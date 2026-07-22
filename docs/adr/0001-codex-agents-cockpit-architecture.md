@@ -176,3 +176,32 @@ merged — see #2–#6)._
   - **Non-goal held: no `agentstate` schema migration.** Existing `state.json` entries
     keyed by cockpit UUIDs are orphans; acceptable for an unreleased tool with no
     production users. A startup sweep remains explicitly out of scope (PRD #48 non-goal).
+
+### Code-only fixes affecting this ADR (results not measured)
+
+This subsection records initiatives whose slice(s) already merged on `main` but whose scope
+was a code-only fix — no architectural decision changed, no measured result was captured,
+and per the originating PRD's Non-goals the in-code doc comment is the docs. The ADR
+itself is not affected; entries are kept here for traceability from the
+[epic #78 dashboard](https://github.com/dzungtr/codex-agents/issues/78).
+
+- **#78 / PRD [#79](https://github.com/dzungtr/codex-agents/issues/79) — `ModifierKeysArgs`
+  `terminal-features` pattern missed `tmux-256color`.** Modifier hotkeys (Shift+Enter,
+  Ctrl+Left/Right, Alt+Backspace, Ctrl+Shift+U) were silently dropped inside
+  cockpit-launched tmux panes because the `terminal-features` pattern `xterm*` did not
+  match the pane's actual `TERM` (`tmux-256color`); the extended-keys protocol was never
+  activated for the pane. Fix landed in `tmuxstatus.ModifierKeysArgs()`
+  (`internal/tmuxstatus/control.go:255`): added `tmux*:extkeys` to the pattern; switched
+  the option flag from `-as` to `-g` so repeated `Launch`/`Resume` no longer accumulate
+  duplicate `xterm*:extkeys` entries; appended `set-option -g focus-events on` so
+  `switch-client` triggers an immediate codex TUI redraw. No architectural decision
+  changed. Merged via
+  [PR #83](https://github.com/dzungtr/codex-agents/pull/83) (slice 1, commit `176b232`)
+  and [PR #85](https://github.com/dzungtr/codex-agents/pull/85) (slice 2, commit
+  `41d3db9`). `go test ./...` green; no architectural result measured.
+  - **Manual smoke — `ready-for-human`, not yet run.** Functional verification
+    (Shift+Enter → newline, Ctrl+Left/Right → word jump, spinner on `switch-client`)
+    requires a real `codex` TUI + a real `~/.codex` install; flagged in
+    [epic #78](https://github.com/dzungtr/codex-agents/issues/78) for the next daily-driver
+    use. Until that smoke lands, this ADR note stands as a code-only record; the epic
+    remains open.
