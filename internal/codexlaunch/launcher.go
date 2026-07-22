@@ -35,19 +35,25 @@ var ErrRegistrationTimeout = fmt.Errorf("codexlaunch: thread did not register in
 // Registrar discovers the thread id codex assigned to a freshly
 // launched thread by matching the worktree cwd against codex own
 // records. The production adapter is cwdRegistrar (over
-// codexstate.ThreadByCWD); tests inject a fake that scripts
+// codexstate.ThreadsByCWD); tests inject a fake that scripts
 // no-row-then-row responses to model codex startup-to-registration
 // latency. This mirrors internal/subthread Registrar seam (ADR 0003
 // decision 4) so the interactive launch path and the headless spawn
 // path block on the same registration signal.
 type Registrar interface {
-	// ThreadIDByCWD returns codex thread id whose cwd matches cwd, plus
-	// whether one has been registered yet. A false ok with a nil error
-	// means "not registered yet, keep polling".
-	ThreadIDByCWD(cwd string) (id string, ok bool, err error)
+	// KnownByCWD returns the set of codex thread ids already known
+	// for cwd, in most-recent-first order. The launcher calls it
+	// once before starting its tmux session to snapshot the
+	// pre-launch set, then again during the registration poll to
+	// pick a freshly-registered id that is not in that snapshot
+	// (issue #67: a single-id resolver collapsed consecutive
+	// in-place launches on the same cwd into the same id). An
+	// empty slice with a nil error means "not registered yet, keep
+	// polling".
+	KnownByCWD(cwd string) ([]string, error)
 }
 
-// cwdRegistrar adapts codexstate.ThreadByCWD to the Launcher.Registrar
+// cwdRegistrar adapts codexstate.ThreadsByCWD to the Launcher.Registrar
 // interface. It captures codexHome so each poll queries codex newest
 // state_*.sqlite fresh - the id is discovered the moment codex writes
 // the thread row, not from a cached read.
@@ -55,8 +61,8 @@ type cwdRegistrar struct {
 	codexHome string
 }
 
-func (r cwdRegistrar) ThreadIDByCWD(cwd string) (string, bool, error) {
-	return codexstate.ThreadByCWD(r.codexHome, cwd)
+func (r cwdRegistrar) KnownByCWD(cwd string) ([]string, error) {
+	return codexstate.ThreadsByCWD(r.codexHome, cwd)
 }
 
 // defaultLivenessAttempts/defaultLivenessInterval bound verifyAlive's
@@ -117,7 +123,7 @@ type Launcher struct {
 	// launched thread by matching the worktree cwd (PRD #48: Launch
 	// blocks until codex registers, then returns codex id as
 	// LaunchResult.ThreadID). Defaults to a cwdRegistrar over
-	// codexstate.ThreadByCWD; tests inject a fake that scripts
+	// codexstate.ThreadsByCWD; tests inject a fake that scripts
 	// no-row-then-row responses.
 	Registrar Registrar
 	// PollInterval is the delay between registration polls. Zero means
@@ -206,22 +212,30 @@ func (l *Launcher) regSleep() func(time.Duration) {
 
 // waitForRegistration polls the Registrar until codex has written the
 // freshly launched thread row (discovered by matching the worktree
-// cwd), returning codex own thread id. Bounded by RegistrationWait;
-// on timeout returns ErrRegistrationTimeout. The shape mirrors
+// cwd and not present in exclude), returning codex own thread id.
+// Bounded by RegistrationWait; on timeout returns
+// ErrRegistrationTimeout. The shape mirrors
 // internal/subthread.Spawner.Spawn poll loop (check first, then sleep)
 // so the common case - codex registered during Launch liveness poll -
 // is one check, zero sleeps.
-func (l *Launcher) waitForRegistration(cwd string) (string, error) {
+//
+// exclude is the snapshot of pre-launch ids captured by Launch before
+// starting the tmux session (issue #67). Without it, two consecutive
+// in-place launches on the same cwd both latch onto the first
+// launch's id because the registrar immediately returns any matching
+// row. Filtering against the snapshot ensures Launch only returns an
+// id that codex registered during the current launch.
+func (l *Launcher) waitForRegistration(cwd string, exclude []string) (string, error) {
 	deadline := time.Now().Add(l.registrationWait())
 	sleep := l.regSleep()
 	interval := l.pollInterval()
 	reg := l.registrar()
 	for {
-		id, ok, err := reg.ThreadIDByCWD(cwd)
+		known, err := reg.KnownByCWD(cwd)
 		if err != nil {
 			return "", fmt.Errorf("codexlaunch: discover codex thread id for %s: %w", cwd, err)
 		}
-		if ok {
+		if id, ok := pickNewID(known, exclude); ok {
 			return id, nil
 		}
 		if !time.Now().Before(deadline) {
@@ -229,6 +243,25 @@ func (l *Launcher) waitForRegistration(cwd string) (string, error) {
 		}
 		sleep(interval)
 	}
+}
+
+// pickNewID returns the first id in known that is not in exclude and
+// whether one was found. Both slices are expected to be short (the
+// pre-launch snapshot plus one or two freshly-registered ids), so a
+// linear scan is fine and keeps the result stable for the common
+// "one matching id" case.
+func pickNewID(known, exclude []string) (string, bool) {
+	excluded := make(map[string]struct{}, len(exclude))
+	for _, id := range exclude {
+		excluded[id] = struct{}{}
+	}
+	for _, id := range known {
+		if _, skip := excluded[id]; skip {
+			continue
+		}
+		return id, true
+	}
+	return "", false
 }
 
 // verifyAlive polls session's pane a few times right after new-session/
@@ -330,6 +363,20 @@ func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 		return LaunchResult{}, fmt.Errorf("codexlaunch: resolve workspace: %w", err)
 	}
 
+	// Snapshot the set of codex thread ids already known for the
+	// resolved cwd *before* starting the tmux session. The
+	// registration poll below filters against this snapshot so two
+	// consecutive in-place launches on the same cwd wait for a
+	// freshly-registered id rather than latching onto the prior
+	// launch's id (issue #67). Taking the snapshot here — before
+	// codex has had a chance to write the new thread row — also
+	// means a stale thread freshly started by some other process
+	// cannot poison the snapshot.
+	known, err := l.registrar().KnownByCWD(ws.WorkDir)
+	if err != nil {
+		return LaunchResult{}, fmt.Errorf("codexlaunch: snapshot known codex ids for %s: %w", ws.WorkDir, err)
+	}
+
 	// The cockpit handle mints the tmux session name (cxa-<prefix>) and
 	// serves as the notify-hook wrapper identity positional - a stable
 	// handle from launch time. It is NOT thread identity: codex own
@@ -354,7 +401,7 @@ func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 	// is codex id, so the optimistic row, agentstate, and the
 	// notify-hook event feed all key by codex id and the
 	// RowsRefreshedMsg merge collapses the duplicate by construction.
-	threadID, err := l.waitForRegistration(ws.WorkDir)
+	threadID, err := l.waitForRegistration(ws.WorkDir, known)
 	if err != nil {
 		_ = l.Tmux.Run(tmuxstatus.KillSessionArgs(session))
 		return LaunchResult{}, err

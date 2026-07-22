@@ -23,35 +23,34 @@ func (f *fakeTmuxRunner) Run(args []string) error {
 	return f.err
 }
 
-// fakeRegistrar scripts the codex thread id a Launch discovers for a given
-// worktree cwd. It returns the scripted ids in order, one per call, modeling
-// the post-launch registration (PRD #48: Launch blocks until the registrar
-// reports a registered id). A test that wants to exercise the
-// not-yet-registered-then-registered transition can prepend a "" to ids.
+// fakeRegistrar scripts the codex thread ids known for a given worktree cwd.
+// It returns each response in order, modeling the pre-launch snapshot and
+// subsequent registration polls.
 type fakeRegistrar struct {
-	ids []string
-	i   int
-	t   *testing.T
+	responses [][]string
+	i         int
+	t         *testing.T
+	onCall    func(int)
 }
 
-func (f *fakeRegistrar) ThreadIDByCWD(string) (string, bool, error) {
-	if f.i >= len(f.ids) {
-		f.t.Fatalf("ran out of scripted registrar ids")
+func (f *fakeRegistrar) KnownByCWD(string) ([]string, error) {
+	if f.i >= len(f.responses) {
+		f.t.Fatalf("ran out of scripted registrar responses")
 	}
-	id := f.ids[f.i]
+	if f.onCall != nil {
+		f.onCall(f.i)
+	}
+	ids := f.responses[f.i]
 	f.i++
-	if id == "" {
-		return "", false, nil
-	}
-	return id, true, nil
+	return append([]string(nil), ids...), nil
 }
 
 // alwaysNotRegistered is a Registrar stub that never reports a registered
 // thread, used to exercise the Launch registration-timeout path.
 type alwaysNotRegistered struct{}
 
-func (alwaysNotRegistered) ThreadIDByCWD(string) (string, bool, error) {
-	return "", false, nil
+func (alwaysNotRegistered) KnownByCWD(string) ([]string, error) {
+	return nil, nil
 }
 
 func newTestLauncher(t *testing.T, git GitRunner, tmux tmuxstatus.Runner, ids []string) (*Launcher, string) {
@@ -69,7 +68,15 @@ func newTestLauncher(t *testing.T, git GitRunner, tmux tmuxstatus.Runner, ids []
 		handleI++
 		return fmt.Sprintf("cockpit-handle-%d", handleI)
 	}
-	reg := &fakeRegistrar{ids: ids, t: t}
+	responses := make([][]string, 1, len(ids)+1)
+	for _, id := range ids {
+		if id == "" {
+			responses = append(responses, nil)
+			continue
+		}
+		responses = append(responses, []string{id})
+	}
+	reg := &fakeRegistrar{responses: responses, t: t}
 	return &Launcher{
 		Git:         git,
 		Tmux:        tmux,
@@ -593,6 +600,49 @@ func TestLaunch_RegistersAfterPoll_ReturnsCodexID(t *testing.T) {
 	}
 	if _, ok := st.Threads["cockpit-handle-1"]; ok {
 		t.Errorf("expected NO state entry keyed by the cockpit handle, got %v", st.Threads)
+	}
+}
+
+func TestLaunch_ConsecutiveInPlaceLaunchesDiscoverDistinctCodexIDs(t *testing.T) {
+	git := &fakeGitRunner{responses: map[string]fakeGitResponse{
+		"[rev-parse --show-toplevel]": {err: fmt.Errorf("not a repo")},
+	}}
+	tmux := &fakeTmuxRunner{}
+	l, _ := newTestLauncher(t, git, tmux, nil)
+	var tmuxCallsAtRegistrarCall []int
+	l.Registrar = &fakeRegistrar{
+		responses: [][]string{
+			nil,
+			{"codex-id-1"},
+			{"codex-id-1"},
+			{"codex-id-1"},
+			{"codex-id-1", "codex-id-2"},
+		},
+		t: t,
+		onCall: func(int) {
+			tmuxCallsAtRegistrarCall = append(tmuxCallsAtRegistrarCall, len(tmux.calls))
+		},
+	}
+	l.RegistrationWait = time.Second
+
+	first, err := l.Launch(LaunchRequest{StartDir: "/plain", Task: "first task"})
+	if err != nil {
+		t.Fatalf("first Launch: %v", err)
+	}
+	second, err := l.Launch(LaunchRequest{StartDir: "/plain", Task: "second task"})
+	if err != nil {
+		t.Fatalf("second Launch: %v", err)
+	}
+
+	if first.ThreadID != "codex-id-1" {
+		t.Fatalf("first ThreadID = %q, want codex-id-1", first.ThreadID)
+	}
+	if second.ThreadID != "codex-id-2" {
+		t.Fatalf("second ThreadID = %q, want codex-id-2", second.ThreadID)
+	}
+	wantTmuxCalls := []int{0, 1, 2, 3, 3}
+	if fmt.Sprint(tmuxCallsAtRegistrarCall) != fmt.Sprint(wantTmuxCalls) {
+		t.Fatalf("tmux calls at registrar calls = %v, want %v", tmuxCallsAtRegistrarCall, wantTmuxCalls)
 	}
 }
 
