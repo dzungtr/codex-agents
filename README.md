@@ -19,7 +19,41 @@ cockpit — with the threads that need your input surfaced at the top.
 
 - Go 1.25+
 - [tmux](https://github.com/tmux/tmux) installed and on `$PATH` — every cockpit-launched
-  thread runs inside a detached tmux session
+  thread runs inside a detached tmux session on the **default tmux socket**, so a tmux
+  server must already be running outside the terminal's cgroup. Otherwise closing the
+  launching terminal kills every spawned thread (see
+  [#69](https://github.com/dzungtr/codex-agents/issues/69)). On systemd-logind hosts
+  (Fedora, etc.) run tmux as a `systemd --user` service so its `KillMode=process` cgroup
+  outlives the originating terminal:
+
+  ```ini
+  # ~/.config/systemd/user/tmux-server.service
+  [Unit]
+  Description=Persistent tmux server for codex-agents threads
+  After=default.target
+
+  [Service]
+  Type=forking
+  ExecStart=/usr/bin/tmux -f /dev/null start-server \; set-option -g exit-empty off
+  ExecStop=-/usr/bin/tmux kill-server
+  RemainAfterExit=yes
+  KillMode=process
+
+  [Install]
+  WantedBy=default.target
+  ```
+
+  ```sh
+  systemctl --user daemon-reload
+  systemctl --user enable --now tmux-server.service
+  loginctl enable-linger $USER
+  ```
+
+  `exit-empty off` is what keeps the server alive after the last session detaches —
+  without it the daemon exits as soon as it has no clients, and the next launch starts a
+  fresh, terminal-scoped server. `loginctl enable-linger` keeps the user service alive
+  across logout. The cockpit never starts a tmux server of its own; whatever server owns
+  the default socket when the cockpit launches is what the spawned sessions attach to.
 - A working `codex` CLI installation with state under `$CODEX_HOME` (default `~/.codex`)
 
 ## Build / run
