@@ -177,9 +177,12 @@ func newestStateDB(codexHome string) (string, error) {
 
 // threadsQuery is the narrow, read-only SELECT this package relies on. It is
 // intentionally minimal: only the columns the cockpit needs. Pinned against
-// fixtures for schema "state_5" (see testdata).
+// fixtures for schema "state_5" (see testdata). The recency_at column was
+// renamed from "recency" in codex's state_5 schema; the cockpit query matches
+// the production column name so the sqlite path doesn't silently degrade to
+// the jsonl fallback (which has no archived filter).
 const threadsQuery = `
-SELECT id, title, cwd, model, git_branch, archived, recency, rollout_path
+SELECT id, title, cwd, model, git_branch, archived, recency_at, rollout_path
 FROM threads
 WHERE archived = 0
 `

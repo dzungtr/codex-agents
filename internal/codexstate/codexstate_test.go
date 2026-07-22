@@ -203,7 +203,7 @@ func TestQueryThreads_OpensReadOnly(t *testing.T) {
 	}
 	defer db.Close()
 
-	if _, err := db.Exec(`INSERT INTO threads (id, title, cwd, model, git_branch, archived, recency, rollout_path) VALUES ('x','x','x','x','x',0,0,'')`); err == nil {
+	if _, err := db.Exec(`INSERT INTO threads (id, title, cwd, model, git_branch, archived, recency_at, rollout_path) VALUES ('x','x','x','x','x',0,0,'')`); err == nil {
 		t.Fatalf("expected write against mode=ro connection to fail, but it succeeded")
 	}
 

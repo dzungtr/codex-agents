@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/dzungtr/codex-agents/internal/agentstate"
 	"github.com/dzungtr/codex-agents/internal/codexstate"
 	"github.com/dzungtr/codex-agents/internal/subthread"
 )
@@ -68,11 +70,12 @@ func TestExitCodeFor_Table(t *testing.T) {
 // (state, live) pair, the expected exit code, and assertions on the JSON
 // stdout. Each case exercises one arm of the ADR 0003 exit-code contract.
 type outputCase struct {
-	name     string
-	args     []string
-	state    fakeState
-	live     func(string) bool
-	wantCode int
+	name      string
+	args      []string
+	state     fakeState
+	live      func(string) bool
+	statePath string // optional: when set, points at an agentstate state.json the test writes before runOutput
+	wantCode  int
 	// wantStatus/wantTurn/wantMessage assert the JSON object on stdout. When
 	// wantCode == 1 (operational error), stdout is a {"error":...} object
 	// instead, asserted via wantErrContains.
@@ -80,6 +83,24 @@ type outputCase struct {
 	wantTurn        int
 	wantMessage     string
 	wantErrContains string
+}
+
+// writeHiddenAgentState writes a temp agentstate state.json with threadID
+// marked Hidden=true and returns its path. Mirrors the helper in
+// internal/subthread's tests; duplicated here so cmd/cdxa's table test can
+// exercise the end-to-end hidden-thread case without reaching across
+// packages.
+func writeHiddenAgentState(t *testing.T, threadID string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	st := agentstate.State{Threads: map[string]agentstate.Entry{
+		threadID: {TmuxSession: "cxa-" + threadID, Hidden: true},
+	}}
+	if err := agentstate.Save(path, st); err != nil {
+		t.Fatalf("write hidden state: %v", err)
+	}
+	return path
 }
 
 func TestRunOutput_ExitCodeTable(t *testing.T) {
@@ -133,6 +154,15 @@ func TestRunOutput_ExitCodeTable(t *testing.T) {
 			wantErrContains: "open /r/m.jsonl: no such file",
 		},
 		{
+			name:      "hidden thread (cockpit-archived) → exit 3, no output",
+			args:      []string{"t-hidden"},
+			state:     fakeState{threads: map[string]codexstate.Thread{"t-hidden": {ID: "t-hidden", RolloutPath: "/r/h.jsonl"}}, turns: map[string]codexstate.Turns{"/r/h.jsonl": {Completed: []codexstate.Turn{{Number: 1, Message: "would-have-leaked"}}}}},
+			live:      func(string) bool { return false },
+			statePath: writeHiddenAgentState(t, "t-hidden"),
+			wantCode:  3,
+			wantStatus: "gone", wantTurn: 0, wantMessage: "",
+		},
+		{
 			name:            "missing thread-id arg → exit 1 usage error",
 			args:            []string{},
 			state:           fakeState{},
@@ -144,7 +174,7 @@ func TestRunOutput_ExitCodeTable(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			d := deps{state: tc.state, live: tc.live, codexHome: "/codex"}
+			d := deps{state: tc.state, live: tc.live, codexHome: "/codex", statePath: tc.statePath}
 			// Capture stdout via a writer swap by calling runOutput directly;
 			// runOutput prints to os.Stdout, so we redirect through a pipe.
 			// Simpler: runOutput uses fmt.Printf to os.Stdout; for testability

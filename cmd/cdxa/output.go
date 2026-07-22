@@ -46,7 +46,7 @@ func runOutput(args []string, d deps) (int, error) {
 	}
 	threadID := fs.Arg(0)
 
-	result, err := subthread.Output(d.state, d.live, d.codexHome, threadID, time.Duration(*wait)*time.Second)
+	result, err := subthread.Output(d.state, d.live, d.codexHome, d.statePath, threadID, time.Duration(*wait)*time.Second)
 	if err != nil {
 		// subthread.Output returns ErrOperational for the exit-1 cases; the
 		// error itself carries the detail. main prints the JSON error object
