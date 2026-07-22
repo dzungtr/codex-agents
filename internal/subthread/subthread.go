@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/dzungtr/codex-agents/internal/agentstate"
 	"github.com/dzungtr/codex-agents/internal/codexstate"
 	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
 )
@@ -151,9 +152,14 @@ type LivenessProvider func(threadID string) bool
 // does not wait out the full N (issue #32).
 //
 // codexHome is $CODEX_HOME (or its ~/.codex default), passed in by the caller
-// so this package has no filesystem-root knowledge of its own.
-func Output(state StateProvider, live LivenessProvider, codexHome, threadID string, wait time.Duration) (Result, error) {
-	res, err := outputOnce(state, live, codexHome, threadID)
+// so this package has no filesystem-root knowledge of its own. statePath is
+// the cockpit's state.json (agentstate.DefaultPath), also resolved by the
+// caller; it is read here only to honour agentstate.Entry.Hidden (issue #60),
+// so a cockpit-archived thread reads as gone rather than leaking its
+// rollout into cdxa output. An empty statePath skips the hidden check —
+// callers that don't have one just pass "".
+func Output(state StateProvider, live LivenessProvider, codexHome, statePath, threadID string, wait time.Duration) (Result, error) {
+	res, err := outputOnce(state, live, codexHome, statePath, threadID)
 	if err != nil {
 		return res, err
 	}
@@ -171,7 +177,7 @@ func Output(state StateProvider, live LivenessProvider, codexHome, threadID stri
 			interval = remaining
 		}
 		sleep(interval)
-		res, err = outputOnce(state, live, codexHome, threadID)
+		res, err = outputOnce(state, live, codexHome, statePath, threadID)
 		if err != nil {
 			return res, err
 		}
@@ -186,13 +192,25 @@ func Output(state StateProvider, live LivenessProvider, codexHome, threadID stri
 // every iteration of the wait loop, so the blocking and non-blocking paths
 // share exactly the same turn-reading (ADR 0003 decision 3: rollout is the
 // sole source of truth, no new parsing in the wait loop).
-func outputOnce(state StateProvider, live LivenessProvider, codexHome, threadID string) (Result, error) {
+func outputOnce(state StateProvider, live LivenessProvider, codexHome, statePath, threadID string) (Result, error) {
 	thread, err := state.FindThread(codexHome, threadID)
 	if err != nil {
 		if errors.Is(err, codexstate.ErrThreadNotFound) {
 			return Result{Status: StatusGone}, nil
 		}
 		return Result{}, fmt.Errorf("%w: find thread %q: %v", ErrOperational, threadID, err)
+	}
+
+	// The cockpit's archive action sets agentstate.Entry.Hidden when codex's
+	// own archive mechanism isn't available (issue #5, fallback write).
+	// Before issue #60 cdxa output ignored that flag, so threads archived
+	// via the cockpit before PR #45 (when the codex archive shell-out
+	// landed) leaked through the jsonl fallback and surfaced as if active.
+	// Treat a hidden thread as gone so cdxa output returns exit 3
+	// ("thread unknown or gone") for them, matching the cockpit's own
+	// hiddenByThread filter in main.go.
+	if threadIsHidden(statePath, threadID) {
+		return Result{Status: StatusGone}, nil
 	}
 
 	turns, err := state.ReadTurns(thread.RolloutPath)
@@ -221,6 +239,25 @@ func outputOnce(state StateProvider, live LivenessProvider, codexHome, threadID 
 		return Result{Status: StatusWorking, Turn: latest.Number, Message: latest.Message}, nil
 	}
 	return Result{Status: StatusDone, Turn: latest.Number, Message: latest.Message}, nil
+}
+
+// threadIsHidden reports whether threadID has been archived from the
+// cockpit's own bookkeeping (agentstate.Entry.Hidden, set by the Archive
+// ("a") action — see agentstate.Entry.Hidden's doc comment). It mirrors
+// the cockpit's own loadAgentState degrade posture: an empty statePath or
+// a load failure returns false so a corrupt or unreadable state.json
+// doesn't stop cdxa output from returning the rollout's content (the
+// hidden filter is best-effort, not authoritative — codex's own archived
+// column is the authoritative filter when the sqlite path is healthy).
+func threadIsHidden(statePath, threadID string) bool {
+	if statePath == "" {
+		return false
+	}
+	st, err := agentstate.Load(statePath)
+	if err != nil || st.Threads == nil {
+		return false
+	}
+	return st.Threads[threadID].Hidden
 }
 
 // DefaultLiveness is the production LivenessProvider: a thread is alive iff

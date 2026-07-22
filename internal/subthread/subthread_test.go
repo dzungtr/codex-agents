@@ -2,9 +2,12 @@ package subthread
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/dzungtr/codex-agents/internal/agentstate"
 	"github.com/dzungtr/codex-agents/internal/codexstate"
 )
 
@@ -58,7 +61,7 @@ func TestOutput_CompletedTurnStatusDone(t *testing.T) {
 	}
 	live := func(string) bool { return false } // session alive or not doesn't matter when latest turn ended
 
-	got, err := Output(state, live, "/codex", "t1", 0)
+	got, err := Output(state, live, "/codex", "", "t1", 0)
 	if err != nil {
 		t.Fatalf("Output: %v", err)
 	}
@@ -87,7 +90,7 @@ func TestOutput_LastTurnInProgressStatusWorking(t *testing.T) {
 	}
 	live := func(string) bool { return false }
 
-	got, err := Output(state, live, "/codex", "t1", 0)
+	got, err := Output(state, live, "/codex", "", "t1", 0)
 	if err != nil {
 		t.Fatalf("Output: %v", err)
 	}
@@ -114,7 +117,7 @@ func TestOutput_NoCompletedTurnSessionAliveStatusWorking(t *testing.T) {
 	}
 	live := func(string) bool { return true }
 
-	got, err := Output(state, live, "/codex", "t1", 0)
+	got, err := Output(state, live, "/codex", "", "t1", 0)
 	if err != nil {
 		t.Fatalf("Output: %v", err)
 	}
@@ -140,7 +143,7 @@ func TestOutput_NoCompletedTurnSessionDeadStatusGone(t *testing.T) {
 	}
 	live := func(string) bool { return false } // session died, no output collected
 
-	got, err := Output(state, live, "/codex", "t1", 0)
+	got, err := Output(state, live, "/codex", "", "t1", 0)
 	if err != nil {
 		t.Fatalf("Output: %v", err)
 	}
@@ -153,7 +156,7 @@ func TestOutput_UnknownThreadIDStatusGone(t *testing.T) {
 	state := fakeState{}                      // no threads
 	live := func(string) bool { return true } // alive status irrelevant when thread unknown
 
-	got, err := Output(state, live, "/codex", "no-such-thread", 0)
+	got, err := Output(state, live, "/codex", "", "no-such-thread", 0)
 	if err != nil {
 		t.Fatalf("Output: expected no error for unknown thread, got %v", err)
 	}
@@ -162,11 +165,143 @@ func TestOutput_UnknownThreadIDStatusGone(t *testing.T) {
 	}
 }
 
+// writeHiddenState creates a temp agentstate state.json with threadID marked
+// Hidden=true, returns the path. Used to exercise the issue #60 fix where
+// cdxa output must treat a cockpit-archived thread (Hidden=true) as gone
+// even when codex's own records still list it (e.g. archived via the
+// cockpit's "a" key before PR #45's codex-archive shell-out landed).
+func writeHiddenState(t *testing.T, threadID string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	st := agentstate.State{Threads: map[string]agentstate.Entry{
+		threadID: {TmuxSession: "cxa-" + threadID, Hidden: true},
+	}}
+	if err := agentstate.Save(path, st); err != nil {
+		t.Fatalf("write hidden state: %v", err)
+	}
+	return path
+}
+
+func TestOutput_HiddenThreadStatusGone(t *testing.T) {
+	// Thread exists in codex (a completed turn available) but the cockpit's
+	// own state.json marks it Hidden=true. Issue #60: cdxa output must
+	// return StatusGone (exit 3) for this thread, not the rollout content
+	// as if it were active.
+	state := fakeState{
+		threads: map[string]codexstate.Thread{
+			"t-hidden": {ID: "t-hidden", RolloutPath: "/r/h.jsonl"},
+		},
+		turns: map[string]codexstate.Turns{
+			"/r/h.jsonl": {Completed: []codexstate.Turn{{Number: 1, Message: "old result"}}},
+		},
+	}
+	live := func(string) bool { return false }
+	statePath := writeHiddenState(t, "t-hidden")
+
+	got, err := Output(state, live, "/codex", statePath, "t-hidden", 0)
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if got.Status != StatusGone {
+		t.Errorf("Status = %s, want gone (hidden thread should not surface)", got.Status)
+	}
+	if got.Turn != 0 || got.Message != "" {
+		t.Errorf("Turn/Message = %d/%q, want 0/<empty> (no collectable output for hidden thread)", got.Turn, got.Message)
+	}
+}
+
+func TestOutput_NonHiddenThreadInStateSurfacesDone(t *testing.T) {
+	// Same setup as the hidden case but the agentstate entry is
+	// Hidden=false — the rollout content must still come through, so the
+	// hidden check is a filter, not a blanket deny.
+	state := fakeState{
+		threads: map[string]codexstate.Thread{
+			"t-vis": {ID: "t-vis", RolloutPath: "/r/v.jsonl"},
+		},
+		turns: map[string]codexstate.Turns{
+			"/r/v.jsonl": {Completed: []codexstate.Turn{{Number: 1, Message: "fresh result"}}},
+		},
+	}
+	live := func(string) bool { return false }
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	st := agentstate.State{Threads: map[string]agentstate.Entry{
+		"t-vis": {TmuxSession: "cxa-t-vis", Hidden: false},
+	}}
+	if err := agentstate.Save(statePath, st); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	got, err := Output(state, live, "/codex", statePath, "t-vis", 0)
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if got.Status != StatusDone {
+		t.Errorf("Status = %s, want done (non-hidden thread should surface)", got.Status)
+	}
+	if got.Turn != 1 || got.Message != "fresh result" {
+		t.Errorf("Turn/Message = %d/%q, want 1/fresh result", got.Turn, got.Message)
+	}
+}
+
+func TestOutput_MissingStateFileStillSurfacesDone(t *testing.T) {
+	// statePath points at a non-existent file: matches the degraded
+	// posture loadAgentState uses in main.go (corrupt or unreadable
+	// state.json must not stop output). Output should treat the thread as
+	// not-hidden and return the rollout.
+	state := fakeState{
+		threads: map[string]codexstate.Thread{
+			"t1": {ID: "t1", RolloutPath: "/r/t1.jsonl"},
+		},
+		turns: map[string]codexstate.Turns{
+			"/r/t1.jsonl": {Completed: []codexstate.Turn{{Number: 1, Message: "ok"}}},
+		},
+	}
+	live := func(string) bool { return false }
+	statePath := filepath.Join(t.TempDir(), "does-not-exist.json")
+
+	got, err := Output(state, live, "/codex", statePath, "t1", 0)
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if got.Status != StatusDone {
+		t.Errorf("Status = %s, want done (missing state.json should not block output)", got.Status)
+	}
+}
+
+func TestOutput_CorruptStateFileStillSurfacesDone(t *testing.T) {
+	// statePath points at a file agentstate can't parse: same degraded
+	// posture as the missing-file case.
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(statePath, []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("write corrupt state: %v", err)
+	}
+	state := fakeState{
+		threads: map[string]codexstate.Thread{
+			"t1": {ID: "t1", RolloutPath: "/r/t1.jsonl"},
+		},
+		turns: map[string]codexstate.Turns{
+			"/r/t1.jsonl": {Completed: []codexstate.Turn{{Number: 1, Message: "ok"}}},
+		},
+	}
+	live := func(string) bool { return false }
+
+	got, err := Output(state, live, "/codex", statePath, "t1", 0)
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if got.Status != StatusDone {
+		t.Errorf("Status = %s, want done (corrupt state.json should not block output)", got.Status)
+	}
+}
+
 func TestOutput_SqliteUnreadableReturnsErrOperational(t *testing.T) {
 	state := fakeState{findErr: errors.New("sqlite: disk I/O error")}
 	live := func(string) bool { return false }
 
-	_, err := Output(state, live, "/codex", "t1", 0)
+	_, err := Output(state, live, "/codex", "", "t1", 0)
 	if err == nil {
 		t.Fatalf("expected error for unreadable sqlite, got nil")
 	}
@@ -184,7 +319,7 @@ func TestOutput_RolloutMissingReturnsErrOperational(t *testing.T) {
 	}
 	live := func(string) bool { return false }
 
-	_, err := Output(state, live, "/codex", "t1", 0)
+	_, err := Output(state, live, "/codex", "", "t1", 0)
 	if err == nil {
 		t.Fatalf("expected error for missing rollout, got nil")
 	}
@@ -206,11 +341,11 @@ func TestOutput_IdempotentRepeatPolls(t *testing.T) {
 	}
 	live := func(string) bool { return false }
 
-	first, err := Output(state, live, "/codex", "t1", 0)
+	first, err := Output(state, live, "/codex", "", "t1", 0)
 	if err != nil {
 		t.Fatalf("first Output: %v", err)
 	}
-	second, err := Output(state, live, "/codex", "t1", 0)
+	second, err := Output(state, live, "/codex", "", "t1", 0)
 	if err != nil {
 		t.Fatalf("second Output: %v", err)
 	}
@@ -233,7 +368,7 @@ func TestOutput_EmptyRolloutNoTurnsSessionAlive(t *testing.T) {
 	}
 	live := func(string) bool { return true }
 
-	got, err := Output(state, live, "/codex", "t1", 0)
+	got, err := Output(state, live, "/codex", "", "t1", 0)
 	if err != nil {
 		t.Fatalf("Output: %v", err)
 	}
@@ -340,7 +475,7 @@ func TestOutput_WaitZeroIdenticalToNoWait(t *testing.T) {
 	}
 	live := func(string) bool { return true }
 
-	got, err := Output(state, live, "/codex", "t1", 0)
+	got, err := Output(state, live, "/codex", "", "t1", 0)
 	if err != nil {
 		t.Fatalf("Output wait=0: %v", err)
 	}
@@ -360,7 +495,7 @@ func TestOutput_WaitNegativeIdenticalToNoWait(t *testing.T) {
 	}
 	live := func(string) bool { return true }
 
-	got, err := Output(state, live, "/codex", "t1", -1*time.Second)
+	got, err := Output(state, live, "/codex", "", "t1", -1*time.Second)
 	if err != nil {
 		t.Fatalf("Output wait<0: %v", err)
 	}
@@ -382,7 +517,7 @@ func TestOutput_WaitImmediateDone(t *testing.T) {
 	}
 	live := func(string) bool { return false }
 
-	got, err := Output(state, live, "/codex", "t1", 5*time.Second)
+	got, err := Output(state, live, "/codex", "", "t1", 5*time.Second)
 	if err != nil {
 		t.Fatalf("Output: %v", err)
 	}
@@ -419,7 +554,7 @@ func TestOutput_WaitTurnCompletesMidWait(t *testing.T) {
 	}
 	live := func(string) bool { return true }
 
-	got, err := Output(state, live, "/codex", "t1", 10*time.Second)
+	got, err := Output(state, live, "/codex", "", "t1", 10*time.Second)
 	if err != nil {
 		t.Fatalf("Output: %v", err)
 	}
@@ -450,7 +585,7 @@ func TestOutput_WaitTimeoutStillWorking(t *testing.T) {
 	live := func(string) bool { return true }
 
 	start := time.Now()
-	got, err := Output(state, live, "/codex", "t1", 50*time.Millisecond)
+	got, err := Output(state, live, "/codex", "", "t1", 50*time.Millisecond)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Output: %v", err)
@@ -487,7 +622,7 @@ func TestOutput_WaitThreadGoneMidWait(t *testing.T) {
 	}
 	live := func(string) bool { return false } // dead session so gone path is reachable
 
-	got, err := Output(flipState, live, "/codex", "t1", 10*time.Second)
+	got, err := Output(flipState, live, "/codex", "", "t1", 10*time.Second)
 	if err != nil {
 		t.Fatalf("Output: %v", err)
 	}

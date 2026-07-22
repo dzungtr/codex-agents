@@ -45,7 +45,7 @@ CREATE TABLE threads (
 	model TEXT NOT NULL,
 	git_branch TEXT NOT NULL,
 	archived INTEGER NOT NULL DEFAULT 0,
-	recency INTEGER NOT NULL,
+	recency_at INTEGER NOT NULL,
 	rollout_path TEXT NOT NULL DEFAULT ''
 );`
 	if _, err := db.Exec(schema); err != nil {
@@ -53,7 +53,7 @@ CREATE TABLE threads (
 	}
 
 	now := time.Now()
-	stmt, err := db.Prepare(`INSERT INTO threads (id, title, cwd, model, git_branch, archived, recency, rollout_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+	stmt, err := db.Prepare(`INSERT INTO threads (id, title, cwd, model, git_branch, archived, recency_at, rollout_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		t.Fatalf("prepare insert: %v", err)
 	}
