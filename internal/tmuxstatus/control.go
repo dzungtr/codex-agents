@@ -223,6 +223,15 @@ func WheelDownArgs() []string {
 // because the host tmux predates extended keys.
 const extendedKeysVersionGuard = `#{m/r:^(3\.[2-9]|[4-9]\.|[1-9][0-9]+\.),#{version}}`
 
+// extendedKeysAlwaysVersionGuard is true only on tmux 3.3 or later, when
+// the `always` value for `extended-keys` was introduced. `always` forces
+// the extended-keys protocol unconditionally — the pane does not need to
+// request it via a modifyOtherKeys escape sequence — which is what makes
+// Shift+Enter (which has no terminfo entry in tmux-256color) reach the
+// application. On 3.2 (which knows `extended-keys` but not `always`), we
+// fall back to `on` via the extended-keys-format line above.
+const extendedKeysAlwaysVersionGuard = `#{m/r:^(3\.[3-9]|[4-9]\.|[1-9][0-9]+\.),#{version}}`
+
 // ModifierKeysArgs builds the argument list for the tmux options that make
 // modified keys (Shift+Enter, Ctrl+Shift+U, Alt+Backspace, ...) reach a
 // cockpit-launched pane instead of being dropped by tmux. With tmux's
@@ -236,30 +245,44 @@ const extendedKeysVersionGuard = `#{m/r:^(3\.[2-9]|[4-9]\.|[1-9][0-9]+\.),#{vers
 //     decode of xterm-style modified keys into the pane.
 //   - `set-option -g extended-keys on` (tmux 3.2+): enables the
 //     extended-keys (CSI u / kitty keyboard protocol) path, which is what
-//     unambiguously encodes combos like Shift+Enter.
-//   - `set-option -g terminal-features ,xterm*:extkeys,tmux*:extkeys` (tmux 3.2+):
+//     unambiguously encodes combos like Shift+Enter. On tmux 3.3+ this is
+//     escalated to `always` (see below): `on` requires the application to
+//     request extended keys via a modifyOtherKeys escape sequence before
+//     tmux will send them, whereas `always` forces the protocol unconditionally.
+//     This matters because Shift+Enter has no terminfo entry in tmux-256color
+//     — the only path that can deliver it is the extended-keys protocol, and
+//     `on` alone leaves it dropped when the application has not (yet) sent the
+//     request (#78: Ctrl+Left/Right worked because they have kLFT5/kRIT5
+//     terminfo entries, but Shift+Enter did not).
+//   - `set-option -g terminal-features ,<defaults>,xterm*:extkeys,tmux*:extkeys` (tmux 3.2+):
 //     advertises the extkeys capability to panes whose outer TERM matches
 //     xterm* or tmux* so the application knows it may emit/expect extended
 //     keys. The tmux* arm is required because codex runs inside the pane
 //     with TERM=tmux-256color — without it, the pane never advertises
 //     extkeys to its child and modified-key sequences are silently dropped
-//     (#78 / #25 Bug 3). `-g` (not `-as`) is deliberate: each Launch/Resume
-//     chain would otherwise append another copy of the list to the live
-//     server's user-level option, growing N identical `xterm*:extkeys`
-//     entries across repeated invocations; `-g` writes a deterministic
-//     user-level value that replaces any prior state with the cockpit's
-//     intended default. Users who customize `terminal-features` should put
-//     those in `~/.tmux.conf`, which re-applies after this chain by design.
+//     (#78 / #25 Bug 3). The value must include tmux's built-in defaults
+//     (xterm*:clipboard:ccolour:cstyle:focus:title, screen*:title,
+//     rxvt*:ignorefkeys) because `-g` replaces the entire option: omitting
+//     them wipes features that xterm* terminals rely on for clipboard
+//     integration, focus reporting, and window titles, which was the
+//     regression introduced by PR #85 and the reason #78 remained open.
+//     `-g` (not `-as`) is deliberate: each Launch/Resume chain would
+//     otherwise append another copy to the live server's user-level option,
+//     growing N identical entries across repeated invocations (#78 original
+//     report); `-g` writes a deterministic user-level value that replaces
+//     any prior state with the cockpit's intended default. Users who
+//     customize `terminal-features` should put those in `~/.tmux.conf`,
+//     which re-applies after this chain by design.
 //   - `set-option -g focus-events on`: turns on tmux's focus-in/focus-out
 //     event reporting. Without this, `switch-client` into a thread pane
 //     does not trigger a TUI redraw in codex; the "working" spinner /
 //     status text is not displayed until the next user interaction forces
 //     one. Available since tmux 1.8 — no version guard needed.
 //
-// The two extended-keys lines run under `if-shell -F` version guards so
-// they no-op cleanly on tmux < 3.2 instead of erroring out the whole
-// invocation; the xterm-keys baseline and the focus-events line are
-// version-safe everywhere.
+// The three extended-keys lines run under `if-shell -F` version guards so
+// they no-op cleanly on tmux < 3.2 (or < 3.3 for the `always` escalation)
+// instead of erroring out the whole invocation; the xterm-keys baseline and
+// the focus-events line are version-safe everywhere.
 //
 // This must be applied via ChainArgs together with the NewSessionArgs it
 // guards, in a single tmux invocation, placed before NewSessionArgs so
@@ -275,8 +298,11 @@ func ModifierKeysArgs() []string {
 		"if-shell", "-F", extendedKeysVersionGuard,
 		"set-option -g extended-keys on",
 		";",
+		"if-shell", "-F", extendedKeysAlwaysVersionGuard,
+		"set-option -g extended-keys always",
+		";",
 		"if-shell", "-F", extendedKeysVersionGuard,
-		"set-option -g terminal-features ,xterm*:extkeys,tmux*:extkeys",
+		"set-option -g terminal-features ,xterm*:clipboard:ccolour:cstyle:focus:title,screen*:title,rxvt*:ignorefkeys,xterm*:extkeys,tmux*:extkeys",
 		";",
 		"set-option", "-g", "focus-events", "on",
 	}

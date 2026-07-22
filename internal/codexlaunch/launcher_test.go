@@ -104,23 +104,33 @@ func newTestLauncher(t *testing.T, git GitRunner, tmux tmuxstatus.Runner, ids []
 	}, statePath
 }
 
-// assertModifierKeysChainedBeforeNewSession is the Bug-3 regression check:
-// the modifier-key decode options (xterm-keys, and the version-guarded
-// extended-keys, plus the terminal-features extkeys advert) must appear
-// in the session-creation invocation, before new-session — without them
-// tmux drops Shift+Enter and other modified keys before they ever reach
-// codex's pane. The tmux*:extkeys arm of terminal-features specifically
-// guards the tmux-256color pane problem reported in #78 / #25 Bug 3:
-// codex runs under TERM=tmux-256color inside the pane, so xterm* alone
-// leaves the outer pane's extkeys capability un-advertised and the app
-// silently misses modified-key sequences. The focus-events on line is
-// the slice-2 invariant (PRD #79 / #81) that lets switch-client into a
-// thread pane trigger an immediate TUI redraw of the working spinner
-// instead of waiting for the next user interaction.
+// assertModifierKeysChainedBeforeNewSession is the Bug-3 / issue-#78 regression
+// check: the modifier-key decode options (xterm-keys, the version-guarded
+// extended-keys escalation to always, and the terminal-features extkeys
+// advert that preserves tmux's built-in defaults) must appear in the
+// session-creation invocation, before new-session — without them tmux drops
+// Shift+Enter and other modified keys before they ever reach codex's pane.
+//
+// The tmux*:extkeys arm of terminal-features specifically guards the
+// tmux-256color pane problem reported in #78 / #25 Bug 3: codex runs under
+// TERM=tmux-256color inside the pane, so xterm* alone leaves the outer
+// pane's extkeys capability un-advertised and the app silently misses
+// modified-key sequences. The extended-keys always escalation (tmux 3.3+)
+// forces the extended-keys protocol unconditionally — `on` alone requires
+// the application to request it, which left Shift+Enter dropped (#78:
+// Ctrl+Left/Right worked because they have kLFT5/kRIT5 terminfo entries,
+// but Shift+Enter has no terminfo entry in tmux-256color and needs the
+// extended-keys protocol). The terminal-features value must also preserve
+// tmux's built-in defaults (xterm*:clipboard:ccolour:cstyle:focus:title,
+// screen*:title, rxvt*:ignorefkeys) — PR #85's `-g` replace without them
+// wiped those features, which is the regression that kept #78 open. The
+// focus-events on line is the slice-2 invariant (PRD #79 / #81) that lets
+// switch-client into a thread pane trigger an immediate TUI redraw of the
+// working spinner instead of waiting for the next user interaction.
 func assertModifierKeysChainedBeforeNewSession(t *testing.T, got []string) {
 	t.Helper()
 	joined := " " + strings.Join(got, " ") + " "
-	for _, opt := range []string{"xterm-keys on", "extended-keys on", "terminal-features", "focus-events on"} {
+	for _, opt := range []string{"xterm-keys on", "extended-keys on", "extended-keys always", "terminal-features", "focus-events on"} {
 		if !strings.Contains(joined, " "+opt) {
 			t.Errorf("tmux call missing modifier-key setup %q, got %v", opt, got)
 		}
@@ -131,6 +141,19 @@ func assertModifierKeysChainedBeforeNewSession(t *testing.T, got []string) {
 	// the loop above uses for the cross-arg options.
 	if !strings.Contains(joined, ",tmux*:extkeys") {
 		t.Errorf("tmux call missing modifier-key setup %q, got %v", ",tmux*:extkeys", got)
+	}
+	// terminal-features must preserve tmux's built-in defaults: `-g`
+	// (replace) without them wipes the features that xterm* terminals rely
+	// on for clipboard integration, focus reporting, and window titles
+	// (the PR #85 regression that kept #78 open).
+	for _, dflt := range []string{
+		",xterm*:clipboard:ccolour:cstyle:focus:title,",
+		",screen*:title,",
+		",rxvt*:ignorefkeys,",
+	} {
+		if !strings.Contains(joined, dflt) {
+			t.Errorf("tmux terminal-features missing built-in default %q, got %v", dflt, got)
+		}
 	}
 	xtermIdx := -1
 	newSessionIdx := -1

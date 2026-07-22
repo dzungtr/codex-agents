@@ -146,7 +146,10 @@ func TestModifierKeysArgs(t *testing.T) {
 	// Baseline xterm-keys decode plus, where the tmux build is new
 	// enough to have the option, extended-keys — the extended-keys
 	// lines are guarded by `if-shell` version checks so the same
-	// command queue stays valid on tmux < 3.2.
+	// command queue stays valid on tmux < 3.2 (and the `always`
+	// escalation on < 3.3). The terminal-features value must include
+	// tmux's built-in defaults: `-g` replaces the entire option, so
+	// omitting them wipes clipboard/focus/title features (#78).
 	got := ModifierKeysArgs()
 	want := []string{
 		"set-option", "-g", "xterm-keys", "on",
@@ -154,8 +157,11 @@ func TestModifierKeysArgs(t *testing.T) {
 		"if-shell", "-F", "#{m/r:^(3\\.[2-9]|[4-9]\\.|[1-9][0-9]+\\.),#{version}}",
 		"set-option -g extended-keys on",
 		";",
+		"if-shell", "-F", "#{m/r:^(3\\.[3-9]|[4-9]\\.|[1-9][0-9]+\\.),#{version}}",
+		"set-option -g extended-keys always",
+		";",
 		"if-shell", "-F", "#{m/r:^(3\\.[2-9]|[4-9]\\.|[1-9][0-9]+\\.),#{version}}",
-		"set-option -g terminal-features ,xterm*:extkeys,tmux*:extkeys",
+		"set-option -g terminal-features ,xterm*:clipboard:ccolour:cstyle:focus:title,screen*:title,rxvt*:ignorefkeys,xterm*:extkeys,tmux*:extkeys",
 		";",
 		"set-option", "-g", "focus-events", "on",
 	}
