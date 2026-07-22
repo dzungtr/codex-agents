@@ -155,7 +155,7 @@ func TestModifierKeysArgs(t *testing.T) {
 		"set-option -g extended-keys on",
 		";",
 		"if-shell", "-F", "#{m/r:^(3\\.[2-9]|[4-9]\\.|[1-9][0-9]+\\.),#{version}}",
-		"set-option -as terminal-features ,xterm*:extkeys",
+		"set-option -as terminal-features ,xterm*:extkeys,tmux*:extkeys",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ModifierKeysArgs() = %v, want %v", got, want)
