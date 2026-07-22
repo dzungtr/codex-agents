@@ -50,6 +50,16 @@ type deps struct {
 	// (newSpawner is used); tests set it to inject a fake-wired Spawner, the
 	// same DI pattern runOutput uses for state/live.
 	spawner spawnerFn
+	// homeResolver maps an agent name to that agent's skill-home
+	// directory for runSkills. nil in production (resolveAgentHome is
+	// used); tests set it to inject a t.TempDir()-rooted fake so the
+	// suite never touches a real agent home, the same DI pattern runSpawn
+	// uses for the spawner factory.
+	homeResolver homeResolverFn
+	// skillLookup fetches the embedded skill bytes by name for
+	// runSkills. nil in production (subthread.Lookup is used); tests
+	// set it to inject a canned registry, same DI pattern as spawner.
+	skillLookup skillLookupFn
 }
 
 // stdout is the writer runOutput/runSpawn and printError emit JSON to.
@@ -70,7 +80,7 @@ func main() {
 func run(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "cdxa: usage: cdxa <command> [args]")
-		fmt.Fprintln(os.Stderr, "commands: output, spawn, send")
+		fmt.Fprintln(os.Stderr, "commands: output, spawn, send, skills")
 		return 1
 	}
 
@@ -78,13 +88,14 @@ func run(args []string) int {
 		"output": runOutput,
 		"spawn":  runSpawn,
 		"send":   runSend,
+		"skills": runSkills,
 	}
 
 	name := args[0]
 	cmd, ok := cmds[name]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "cdxa: unknown command %q\n", name)
-		fmt.Fprintln(os.Stderr, "commands: output, spawn, send")
+		fmt.Fprintln(os.Stderr, "commands: output, spawn, send, skills")
 		return 1
 	}
 
@@ -120,6 +131,8 @@ func newDeps() (deps, error) {
 		live:      subthread.DefaultLiveness(tmuxstatus.ListLiveSessions),
 		codexHome: codexHome,
 		statePath: statePath,
+		homeResolver: resolveAgentHome,
+		skillLookup:  subthread.Lookup,
 	}, nil
 }
 
