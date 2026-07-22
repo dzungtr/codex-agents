@@ -4,6 +4,8 @@ A terminal cockpit for running several [codex](https://github.com/openai/codex) 
 parallel. It is *only* a list view — the conversation experience is codex's own TUI,
 unmodified.
 
+![codex-agents cockpit: list of codex threads in the terminal](assets/cdxa-preview.png)
+
 ## Problem
 
 Running several codex agents in parallel means juggling terminal windows by hand: no single
