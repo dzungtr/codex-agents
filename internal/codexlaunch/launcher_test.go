@@ -106,9 +106,14 @@ func newTestLauncher(t *testing.T, git GitRunner, tmux tmuxstatus.Runner, ids []
 
 // assertModifierKeysChainedBeforeNewSession is the Bug-3 regression check:
 // the modifier-key decode options (xterm-keys, and the version-guarded
-// extended-keys) must appear in the session-creation invocation, before
-// new-session — without them tmux drops Shift+Enter and other modified
-// keys before they ever reach codex's pane.
+// extended-keys, plus the terminal-features extkeys advert) must appear
+// in the session-creation invocation, before new-session — without them
+// tmux drops Shift+Enter and other modified keys before they ever reach
+// codex's pane. The tmux*:extkeys arm of terminal-features specifically
+// guards the tmux-256color pane problem reported in #78 / #25 Bug 3:
+// codex runs under TERM=tmux-256color inside the pane, so xterm* alone
+// leaves the outer pane's extkeys capability un-advertised and the app
+// silently misses modified-key sequences.
 func assertModifierKeysChainedBeforeNewSession(t *testing.T, got []string) {
 	t.Helper()
 	joined := " " + strings.Join(got, " ") + " "
@@ -116,6 +121,13 @@ func assertModifierKeysChainedBeforeNewSession(t *testing.T, got []string) {
 		if !strings.Contains(joined, " "+opt) {
 			t.Errorf("tmux call missing modifier-key setup %q, got %v", opt, got)
 		}
+	}
+	// tmux*:extkeys lives inside a single terminal-features arg element
+	// (preceded by a comma, not a separate token), so it needs its own
+	// anchored substring check rather than the space-prefixed token form
+	// the loop above uses for the cross-arg options.
+	if !strings.Contains(joined, ",tmux*:extkeys") {
+		t.Errorf("tmux call missing modifier-key setup %q, got %v", ",tmux*:extkeys", got)
 	}
 	xtermIdx := -1
 	newSessionIdx := -1
