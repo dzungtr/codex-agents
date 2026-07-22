@@ -1,8 +1,11 @@
-# codex-agents
+# cdxa
 
-A terminal cockpit for running several [codex](https://github.com/openai/codex) agents in
-parallel. It is *only* a list view — the conversation experience is codex's own TUI,
-unmodified.
+A single binary that is both a terminal cockpit for running several
+[codex](https://github.com/openai/codex) agents in parallel and a headless CLI
+for codex thread delegation. Launched without a subcommand, `cdxa` opens the
+cockpit TUI; with a subcommand (`spawn`, `output`, `send`, `skills`), it performs
+headless JSON-only work (ADR 0005). The cockpit is *only* a list view — the
+conversation experience is codex's own TUI, unmodified.
 
 ![codex-agents cockpit: list of codex threads in the terminal](assets/cdxa-preview.png)
 
@@ -61,19 +64,28 @@ cockpit — with the threads that need your input surfaced at the top.
 ## Build / run
 
 ```sh
-go build ./cmd/codex-agents
-./codex-agents
+go build ./cmd/cdxa
+./cdxa
 ```
 
 or, without a separate build step:
 
 ```sh
-go run ./cmd/codex-agents
+go run ./cmd/cdxa
 ```
 
 Run it from the directory you want new threads launched into — the composer starts threads in
 that directory (in a per-thread git worktree, if it's a git repo), while the list itself shows
 threads across all projects. `$CODEX_HOME` is honored if set, otherwise `~/.codex` is used.
+
+To use a headless subcommand instead of the cockpit TUI:
+
+```sh
+cdxa spawn "task" --workspace inplace
+cdxa output <thread-id>
+cdxa send <thread-id> "follow-up"
+cdxa skills cdxa-spawn --agent codex
+```
 
 ## Keybinds
 
@@ -99,19 +111,20 @@ within each group — ordering is the attention mechanism; there are no desktop 
 
 ## Architecture
 
-See [`docs/adr/0001-codex-agents-cockpit-architecture.md`](docs/adr/0001-codex-agents-cockpit-architecture.md)
+See [`docs/adr/0001-codex-agents-cockpit-architecture.md`](docs/adr/0001-codex-agents-cockpit-architecture.md) (cockpit architecture) and [`docs/adr/0005-unified-cdxa-binary.md`](docs/adr/0005-unified-cdxa-binary.md) (unified binary)
 for the full architectural contract (stack, read-only sqlite state source, tmux-per-thread
 process model, worktree-per-thread launch semantics, status derivation) and measured results.
 The original problem/solution/user-story writeup lives in
 [PRD issue #1](https://github.com/dzungtr/codex-agents/issues/1).
 
-## Headless delegation (`cdxa`)
+## Headless delegation (`cdxa` subcommands)
 
-A codex thread can delegate work to another codex thread via the headless
-`cdxa` binary (a second binary built from the same module, sharing
-`internal/`). The architectural contract — three commands (`spawn`,
-`output`, `send`), JSON-only stdout, and a frozen exit-code mapping — is
-[ADR 0003](docs/adr/0003-cdxa-subthread-cli.md); vocabulary (thread,
+A codex thread can delegate work to another codex thread via `cdxa`'s
+headless subcommands (`spawn`, `output`, `send`, `skills`). The architectural
+contract — JSON-only stdout and a frozen exit-code mapping — is
+[ADR 0003](docs/adr/0003-cdxa-subthread-cli.md); the unified-binary
+decision (subcommand dispatch before bubbletea init) is
+[ADR 0005](docs/adr/0005-unified-cdxa-binary.md); vocabulary (thread,
 subthread, turn) is in [`CONTEXT.md`](CONTEXT.md).
 
 For copy-pasteable parent-thread prompt patterns — poll loops, turn
