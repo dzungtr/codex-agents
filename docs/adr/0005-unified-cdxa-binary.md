@@ -138,3 +138,71 @@ force. The JSON-only-stdout contract for `spawn`/`output`/`send`/
   are updated to `cdxa`.
 - `codex-agents` as a binary name is gone. Users who had shell aliases
   or muscle memory for `codex-agents` update to `cdxa`.
+
+## Measured results
+
+_Filled from the unified-binary initiative epic (#74) at close. All three slice PRs (#82,
+#84, #87) merged; this section promotes the Results content from the epic body._
+
+### Merged slice PRs
+
+The pre-run docs PR
+[#73](https://github.com/dzungtr/codex-agents/pull/73) (this ADR itself) landed before
+the code slices. The three code slices landed in serial dependency order, each blocking
+the next — no parallelism:
+
+- **PR #82** (slice #75) — `internal/cockpit` package created; the 618 lines of cockpit
+  entry-point logic plus 576 lines of tests moved from `cmd/codex-agents/main.go` to
+  `internal/cockpit/`, with the 21 tests relocated to
+  `internal/cockpit/cockpit_test.go` alongside the functions they cover.
+  Commit `0ea7a3d`.
+- **PR #84** (slice #76) — `notify-hook` joined the `cmd/cdxa` dispatch table as a
+  regular `command` entry (adapter wrapping `runNotifyHook` to the `command` type, always
+  returning `(0, nil)`); the pre-TUI `if os.Args[1] == "notify-hook"` guard was removed;
+  no-args default now calls `cockpit.Run`. `runNotifyHook` itself moved to
+  `cmd/cdxa/notifyhook.go`. Commit `5566bdce`.
+- **PR #87** (slice #77, after one fix round) — `cmd/codex-agents/` deleted;
+  `notifyhook_integration_test.go` relocated to `cmd/cdxa/` and updated to build and
+  invoke the `cdxa` binary instead. Sweep of `cmd/` and `internal/` clean except for
+  the runtime strings deferred to #88. Commit `0bfa6457`.
+
+### Structural outcomes
+
+`cmd/cdxa` is the sole binary; `cmd/codex-agents` no longer exists. The cockpit wiring
+now lives in `internal/cockpit`, exposing the single deep-module entry point
+`Run(codexHome, statePath) error` — consistent with the repo's "every concern in
+`internal/`" pattern that ADR 0005 decision 3 cited. `cmd/cdxa/main.go` is a thin
+dispatch layer: a uniform `cmds` map plus the no-args default, so adding future
+subcommands is a one-line map entry. The bubbletea model/view/update in `internal/ui`
+was untouched across all three slices, confirming the layering contract from decision
+3 (TUI rendering is downstream of the cockpit wiring). ADR 0003 decision 1 (the
+separate-binary split) is formally superseded; decisions 2–7 of ADR 0003 (JSON-only
+stdout, frozen exit-code mapping, three commands) remain in force and were not affected
+by the unification.
+
+### Deferred work
+
+One follow-up filed against this initiative: #88 — rename the remaining `codex-agents`
+runtime strings (`internal/codexserver/manager.go:203` `clientInfo.name` plus four
+user-facing error labels in `internal/cockpit/cockpit.go`). These are out of scope for
+the binary-removal slice — they don't affect the build artifact or the install
+hazard — but they are conceptually part of the unification, so they are tracked as a
+separate enhancement issue rather than a silent carve-out.
+
+### Verification
+
+- `go build ./cmd/cdxa` produces the sole binary; there is no other buildable target.
+- `go test ./...` is green across 11 packages.
+- `go vet ./...` is clean.
+- `grep -r "codex-agents" cmd/ internal/` returns only import paths, the runtime state
+  directory path, the #88-deferred strings, and historical/ADR `//` comments — no
+  lingering binary references in code paths.
+
+### User-facing behavior change
+
+Before this initiative, `codex-agents` (with no args) launched the cockpit and
+`cdxa {spawn,output,send,skills}` were the headless subcommands — two binaries sharing
+one install path, with one being silently overwritten by the other in practice. After:
+`cdxa` (no args) launches the cockpit, and `cdxa {spawn,output,send,skills,notify-hook}`
+are headless. Single binary, single install path, no overwrite hazard. Shell aliases
+or muscle memory for `codex-agents` update to `cdxa` (per the final consequence above).
