@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/dzungtr/codex-agents/internal/cockpit"
 	"github.com/dzungtr/codex-agents/internal/codexstate"
 	"github.com/dzungtr/codex-agents/internal/subthread"
 	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
@@ -79,23 +80,32 @@ func main() {
 // on stdout.
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "cdxa: usage: cdxa <command> [args]")
-		fmt.Fprintln(os.Stderr, "commands: output, spawn, send, skills")
-		return 1
+		d, err := newDeps()
+		if err != nil {
+			printError(err)
+			return 1
+		}
+		if err := cockpit.Run(d.codexHome, d.statePath); err != nil {
+			printError(err)
+			return 1
+		}
+		return 0
 	}
 
 	cmds := map[string]command{
-		"output": runOutput,
-		"spawn":  runSpawn,
-		"send":   runSend,
-		"skills": runSkills,
+		"output":      runOutput,
+		"spawn":       runSpawn,
+		"send":        runSend,
+		"skills":      runSkills,
+		"notify-hook": runNotifyHookCmd,
 	}
 
 	name := args[0]
 	cmd, ok := cmds[name]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "cdxa: unknown command %q\n", name)
-		fmt.Fprintln(os.Stderr, "commands: output, spawn, send, skills")
+		fmt.Fprintln(os.Stderr, "commands: spawn, output, send, skills, notify-hook")
+		fmt.Fprintln(os.Stderr, "(no command opens the cockpit TUI)")
 		return 1
 	}
 
