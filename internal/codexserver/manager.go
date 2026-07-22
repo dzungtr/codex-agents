@@ -200,12 +200,12 @@ func (m *Manager) Start() error {
 	var initResult map[string]any
 	if err := cli.Request("initialize", map[string]any{
 		"clientInfo": map[string]any{
-			"name":    "codex-agents",
+			"name":    "cdxa",
 			"version": "0.1.0",
 		},
 	}, &initResult); err != nil {
 		// Handshake failed — kill the process and degrade. Don't
-		// return the raw error path verbatim: callers (cmd/codex-agents)
+		// return the raw error path verbatim: callers (cmd/cdxa)
 		// already log the manager's availability state, so the
 		// returned error is for debugging only.
 		m.markUnavailable()

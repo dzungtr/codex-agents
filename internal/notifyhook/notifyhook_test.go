@@ -12,9 +12,9 @@ import (
 )
 
 func TestWrapperArgsAndParseWrapperArgs_RoundTrip(t *testing.T) {
-	args := WrapperArgs("/usr/local/bin/codex-agents", "thread-1", "/home/x/.codex-agents/events.jsonl", []string{"/usr/bin/terminal-notifier", "-title", "codex"})
+	args := WrapperArgs("/usr/local/bin/cdxa", "thread-1", "/home/x/.codex-agents/events.jsonl", []string{"/usr/bin/terminal-notifier", "-title", "codex"})
 	want := []string{
-		"/usr/local/bin/codex-agents", "notify-hook", "thread-1",
+		"/usr/local/bin/cdxa", "notify-hook", "thread-1",
 		"/home/x/.codex-agents/events.jsonl",
 		"/usr/bin/terminal-notifier\x1f-title\x1fcodex",
 	}
@@ -47,7 +47,7 @@ func TestWrapperArgsAndParseWrapperArgs_RoundTrip(t *testing.T) {
 }
 
 func TestWrapperArgs_NoForward_ParsesToNilForward(t *testing.T) {
-	args := WrapperArgs("/bin/codex-agents", "thread-2", "/events.jsonl", nil)
+	args := WrapperArgs("/bin/cdxa", "thread-2", "/events.jsonl", nil)
 	invocation := append(append([]string(nil), args[2:]...), `{}`)
 
 	_, _, forward, _, err := ParseWrapperArgs(invocation)

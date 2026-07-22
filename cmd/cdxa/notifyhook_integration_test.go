@@ -12,28 +12,33 @@ import (
 	"github.com/dzungtr/codex-agents/internal/agentstate"
 )
 
-// TestNotifyHookSubcommand_EndToEnd builds the real codex-agents binary and
+// TestNotifyHookSubcommand_EndToEnd builds the real cdxa binary and
 // invokes it exactly as codex would per internal/notifyhook.WrapperArgs:
-// `codex-agents notify-hook <session> <eventsPath> <forwardJoined>
-// <payload>`. The wrapper identity positional is the tmux session name
-// (PRD #48: stable from launch time, since codex thread id is not known
-// until codex registers). runNotifyHook resolves the session name back to
-// codex thread id via agentstate before recording the event, so events.jsonl
-// and state.json end up keyed by codex id. This exercises main()'s
-// hidden-subcommand dispatch + resolution end-to-end (PRD #1's testing
-// decisions call for an integration test covering launch -> status
-// transitions; this is the notify-hook half of that loop, without needing a
-// real codex/tmux).
+// `cdxa notify-hook <session> <eventsPath> <forwardJoined> <payload>`.
+// The wrapper identity positional is the tmux session name (PRD #48:
+// stable from launch time, since codex thread id is not known until codex
+// registers). runNotifyHook resolves the session name back to codex thread
+// id via agentstate before recording the event, so events.jsonl and
+// state.json end up keyed by codex id. This exercises main()'s hidden
+// subcommand dispatch + the runNotifyHookCmd adapter in notifyhook.go
+// end-to-end (PRD #1's testing decisions call for an integration test
+// covering launch -> status transitions; this is the notify-hook half of
+// that loop, without needing a real codex/tmux).
+//
+// Moved from cmd/codex-agents/notifyhook_integration_test.go in slice
+// #77: now that cdxa is the sole binary, this test belongs in the same
+// package as the subcommand under test (cmd/cdxa), not in the now-deleted
+// cmd/codex-agents transition shim.
 func TestNotifyHookSubcommand_EndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping go-build-based integration test in -short mode")
 	}
 
 	binDir := t.TempDir()
-	binPath := filepath.Join(binDir, "codex-agents")
+	binPath := filepath.Join(binDir, "cdxa")
 	build := exec.Command("go", "build", "-o", binPath, ".")
 	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build codex-agents: %v\n%s", err, out)
+		t.Fatalf("build cdxa: %v\n%s", err, out)
 	}
 
 	home := t.TempDir()

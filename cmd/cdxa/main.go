@@ -1,6 +1,6 @@
 // Command cdxa is the headless, JSON-only surface for codex threads that
 // delegate work to other codex threads (ADR 0003). It is a second binary
-// built from the same module as the cockpit (cmd/codex-agents), sharing
+// built from the same module as the cockpit (internal/cockpit), sharing
 // internal/. The cockpit binary bootstraps bubbletea on startup; a parent
 // codex thread invoking it for a headless call would couple delegation to a
 // TUI lifecycle it never sees, so cdxa is a separate, minimal entry point.
@@ -147,8 +147,9 @@ func newDeps() (deps, error) {
 }
 
 // resolveCodexHome honors $CODEX_HOME (as codex's own CLI does) before
-// falling back to ~/.codex. Mirrors cmd/codex-agents so both binaries agree
-// on where codex's state lives.
+// falling back to ~/.codex. The same env-var discipline the cockpit uses
+// (its old cmd/codex-agents shim called into cockpit.ResolveCodexHome for
+// the same reason — the helper was retired when the shim was deleted).
 func resolveCodexHome() (string, error) {
 	if home := os.Getenv("CODEX_HOME"); home != "" {
 		return home, nil
