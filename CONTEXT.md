@@ -1,7 +1,10 @@
 # codex-agents
 
-A terminal cockpit for running several codex agents in parallel, plus a
-headless CLI (`cdxa`) that lets one codex thread delegate work to another.
+A single `cdxa` binary that is both a terminal cockpit for running several
+codex agents in parallel and a headless CLI that lets one codex thread
+delegate work to another. Launched without a subcommand, `cdxa` opens the
+cockpit TUI; with a subcommand (`spawn`, `output`, `send`, `skills`), it
+performs headless JSON-only work (ADR 0005).
 
 ## Language
 

@@ -17,9 +17,16 @@ existing machinery, not new machinery.
 
 ## Decisions
 
-### 1. Separate `cdxa` binary, headless and JSON-only
+### 1. ~~Separate `cdxa` binary, headless and JSON-only~~ Superseded by ADR 0005
 
-`cmd/cdxa` builds a second binary from the same module, sharing
+> **Superseded by ADR 0005.** This decision is superseded by [ADR 0005
+> (Unified cdxa binary)](0005-unified-cdxa-binary.md). `cmd/codex-agents`
+> and `cmd/cdxa` are now a single binary (`cdxa`); the headless subcommands
+> (`spawn`, `output`, `send`, `skills`) dispatch before any bubbletea
+> init, achieving the same isolation without the dual-binary deployment
+> hazard. The JSON-only-stdout contract for those subcommands is unchanged.
+
+`cmd/cdxa` was a second binary built from the same module, sharing
 `internal/`. The cockpit binary (`cmd/codex-agents`) bootstraps bubbletea
 on startup; a parent codex thread invoking it for a headless call would
 couple delegation to a TUI lifecycle it never sees. All three commands
