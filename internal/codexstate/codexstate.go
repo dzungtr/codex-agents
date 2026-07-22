@@ -147,7 +147,7 @@ func newestStateDB(codexHome string) (string, error) {
 		return "", fmt.Errorf("codexstate: glob %s: %w", stateDBGlob, err)
 	}
 	if len(matches) == 0 {
-		return "", fmt.Errorf("codexstate: no state database matching %s under %s", stateDBGlob, codexHome)
+		return "", fmt.Errorf("codexstate: no state database matching %s under %s: %w", stateDBGlob, codexHome, errNoStateDB)
 	}
 
 	type candidate struct {
@@ -163,7 +163,7 @@ func newestStateDB(codexHome string) (string, error) {
 		candidates = append(candidates, candidate{path: m, modTime: info.ModTime()})
 	}
 	if len(candidates) == 0 {
-		return "", fmt.Errorf("codexstate: no readable state database under %s", codexHome)
+		return "", fmt.Errorf("codexstate: no readable state database under %s: %w", codexHome, errNoStateDB)
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {

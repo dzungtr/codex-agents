@@ -1,6 +1,7 @@
 package codexstate
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -177,5 +178,126 @@ func TestThreadByCWD_NoDataAtAllIsNotFound(t *testing.T) {
 	}
 	if found {
 		t.Errorf("expected not found when no codex data exists at all, got id=%q", id)
+	}
+}
+
+func TestThreadsByCWD_ReturnsAllMatchingIDsInNewestSQLite(t *testing.T) {
+	// Two prior threads already live for this cwd; a third, just-
+	// registered one will appear after the snapshot. ThreadsByCWD must
+	// return *all* known ids, recency-sorted, so the launcher can
+	// snapshot them and wait for a new id distinct from either.
+	dir := t.TempDir()
+	buildFixtureDB(t, dir, "state_5.sqlite", []fixtureThread{
+		{ID: "older", Title: "Older", CWD: "/repo", Model: "m", GitBranch: "main", RecencyAgo: 3 * time.Second},
+		{ID: "newer", Title: "Newer", CWD: "/repo", Model: "m", GitBranch: "main", RecencyAgo: time.Second},
+		{ID: "other", Title: "Other", CWD: "/elsewhere", Model: "m", GitBranch: "main", RecencyAgo: time.Second},
+	})
+
+	got, err := ThreadsByCWD(dir, "/repo")
+	if err != nil {
+		t.Fatalf("ThreadsByCWD: %v", err)
+	}
+	want := []string{"newer", "older"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("ThreadsByCWD(/repo) = %v, want %v", got, want)
+	}
+}
+
+func TestThreadsByCWD_ArchivedThreadsAreIncluded(t *testing.T) {
+	// A thread codex has archived is still one codex knows about —
+	// registration-detection (and therefore the pre-launch snapshot)
+	// must include archived rows so an in-place launch waiting for a
+	// new id is not lulled into accepting the archived one.
+	dir := t.TempDir()
+	buildFixtureDB(t, dir, "state_5.sqlite", []fixtureThread{
+		{ID: "archived-cwd", Title: "Archived", CWD: "/repo", Model: "m", GitBranch: "main", Archived: true, RecencyAgo: time.Second},
+	})
+
+	got, err := ThreadsByCWD(dir, "/repo")
+	if err != nil {
+		t.Fatalf("ThreadsByCWD: %v", err)
+	}
+	if fmt.Sprint(got) != fmt.Sprint([]string{"archived-cwd"}) {
+		t.Errorf("ThreadsByCWD = %v, want [archived-cwd]", got)
+	}
+}
+
+func TestThreadsByCWD_NoMatchesReturnsNilNil(t *testing.T) {
+	// A non-empty codexHome with rows for *other* cwds must return an
+	// empty slice (and a nil error) — not a false-positive "not
+	// registered" because the cwd is merely unfamiliar.
+	dir := t.TempDir()
+	buildFixtureDB(t, dir, "state_5.sqlite", []fixtureThread{
+		{ID: "other-1", Title: "Other", CWD: "/elsewhere", Model: "m", GitBranch: "main", RecencyAgo: time.Second},
+	})
+
+	got, err := ThreadsByCWD(dir, "/repo")
+	if err != nil {
+		t.Fatalf("ThreadsByCWD: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ThreadsByCWD = %v, want empty slice", got)
+	}
+}
+
+func TestThreadsByCWD_NoDataAtAllReturnsNilNil(t *testing.T) {
+	// A missing codexHome is not an error: codex has simply not been
+	// run yet. The launcher's pre-launch snapshot gets an empty
+	// exclusion set, which is correct (no prior ids to exclude).
+	dir := t.TempDir()
+	got, err := ThreadsByCWD(dir, "/repo")
+	if err != nil {
+		t.Fatalf("ThreadsByCWD on empty codexHome: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ThreadsByCWD = %v, want empty slice", got)
+	}
+}
+
+func TestThreadsByCWD_NoStateDBFallsBackToJSONL(t *testing.T) {
+	// When no state_*.sqlite exists, the jsonl scan must succeed and
+	// return the matching id. (Issue #67's in-place path runs in cwd
+	// that is also a non-git dir with no prior state DB, so this is
+	// the common-case first-launch path.)
+	dir := t.TempDir()
+	sessionsDir := dir + "/sessions"
+	writeRolloutFile(t, sessionsDir+"/rollout.jsonl", sessionMetaPayload{
+		ID:    "jsonl-by-cwd",
+		Title: "JSONL",
+		CWD:   "/repo",
+		Model: "m",
+	}, 0, false)
+
+	got, err := ThreadsByCWD(dir, "/repo")
+	if err != nil {
+		t.Fatalf("ThreadsByCWD: %v", err)
+	}
+	if fmt.Sprint(got) != fmt.Sprint([]string{"jsonl-by-cwd"}) {
+		t.Errorf("ThreadsByCWD = %v, want [jsonl-by-cwd]", got)
+	}
+}
+
+func TestThreadsByCWD_SchemaProbeFailureDegradesToJSONL(t *testing.T) {
+	// A drifted schema (missing recency_at column) must trigger the
+	// jsonl fallback, matching LoadThreads' degradation posture. The
+	// alternative — propagating the schema-probe error — would block
+	// every launch on a codex upgrade until the cockpit's sqlite
+	// reader is updated.
+	dir := t.TempDir()
+	buildLegacySchemaDB(t, dir, "state_5.sqlite")
+	sessionsDir := dir + "/sessions"
+	writeRolloutFile(t, sessionsDir+"/rollout.jsonl", sessionMetaPayload{
+		ID:    "jsonl-after-schema-drift",
+		Title: "JSONL",
+		CWD:   "/repo",
+		Model: "m",
+	}, 0, false)
+
+	got, err := ThreadsByCWD(dir, "/repo")
+	if err != nil {
+		t.Fatalf("ThreadsByCWD: %v", err)
+	}
+	if fmt.Sprint(got) != fmt.Sprint([]string{"jsonl-after-schema-drift"}) {
+		t.Errorf("ThreadsByCWD = %v, want [jsonl-after-schema-drift]", got)
 	}
 }
