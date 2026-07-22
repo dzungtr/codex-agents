@@ -11,7 +11,7 @@ import (
 // Actions are the side-effecting operations the list screen can trigger.
 // The ui package stays decoupled from process execution and codex-specific
 // invocation knowledge (that's internal/codexlaunch and internal/tmuxstatus)
-// — callers (cmd/codex-agents) wire these up and hand them to WithActions.
+// — callers (cmd/cdxa) wire these up and hand them to WithActions.
 // A zero-value Actions makes the composer submit and row-Enter into no-ops,
 // which keeps the model usable (and every existing test passing) without
 // any action wired.

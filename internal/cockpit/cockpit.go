@@ -45,7 +45,7 @@ const defaultBaseBranch = "main"
 func Run(codexHome, statePath string) error {
 	startDir, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("cdxa: resolve working directory: %w", err)
+		return fmt.Errorf("codex-agents: resolve working directory: %w", err)
 	}
 
 	launcher := &codexlaunch.Launcher{
@@ -61,7 +61,7 @@ func Run(codexHome, statePath string) error {
 		// composer falls back to the "no profiles on disk" state and
 		// launches with no -p flag, so a permissions error on
 		// $CODEX_HOME can't take the whole cockpit down.
-		fmt.Fprintf(os.Stderr, "cdxa: discover profiles: %v\n", err)
+		fmt.Fprintf(os.Stderr, "codex-agents: discover profiles: %v\n", err)
 		profiles = nil
 	}
 
@@ -81,7 +81,7 @@ func Run(codexHome, statePath string) error {
 	// row list, never crash on a peripheral.
 	mgr := codexserver.NewManager(codexHome)
 	if err := mgr.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "cdxa: codex App Server unavailable (%v); live updates disabled\n", err)
+		fmt.Fprintf(os.Stderr, "codex-agents: codex App Server unavailable (%v); live updates disabled\n", err)
 	} else {
 		// Subscribe to every alive thread on startup so the
 		// existing rows light up immediately. We pass over
@@ -211,7 +211,7 @@ func loadRows(codexHome, statePath string) ([]ui.Row, error) {
 func loadAgentState(statePath string) agentstate.State {
 	st, err := agentstate.Load(statePath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "cdxa: load state (degrading to tmux-liveness-only status):", err)
+		fmt.Fprintln(os.Stderr, "codex-agents: load state (degrading to tmux-liveness-only status):", err)
 		return agentstate.State{Threads: map[string]agentstate.Entry{}}
 	}
 	return st

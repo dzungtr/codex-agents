@@ -200,7 +200,7 @@ func (m *Manager) Start() error {
 	var initResult map[string]any
 	if err := cli.Request("initialize", map[string]any{
 		"clientInfo": map[string]any{
-			"name":    "cdxa",
+			"name":    "codex-agents",
 			"version": "0.1.0",
 		},
 	}, &initResult); err != nil {

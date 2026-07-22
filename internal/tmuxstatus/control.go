@@ -61,7 +61,7 @@ func SendEnterArgs(session string) []string {
 // C-c`: the interrupt sequence used by the Interrupt (`x`) list action
 // (PRD #1's List behavior -> Interrupt row) to stop a thread's current turn
 // without killing its session. Whether that transition actually lands as
-// StatusWaiting is decided by whoever calls this (cmd/codex-agents) in
+// StatusWaiting is decided by whoever calls this (cmd/cdxa) in
 // concert with agentstate's last-turn-event bookkeeping — this function is
 // pure tmux-argument-building knowledge, same layering as NewSessionArgs.
 func InterruptArgs(session string) []string {
