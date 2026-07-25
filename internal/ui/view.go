@@ -52,8 +52,8 @@ var (
 	// #20), so brackets stand in for the border here.
 	badgeStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 	helpKeyStyle    = lipgloss.NewStyle().Bold(true)
-	waitingDotStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	workingDotStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
+	waitingDotStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("35")).Bold(true)
+	workingDotStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	closedDotStyle  = lipgloss.NewStyle().Faint(true)
 	// titleBarStyle draws only a bottom border under the title line, per
 	// the style contract's `.term-titlebar` (which is a plain flex row
