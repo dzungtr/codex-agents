@@ -167,6 +167,23 @@ unchanged.
 
 ## Measured results
 
-_Filled at initiative close. The code slice (#97) implements
-`WrapWithShell` and wires it into `Launch`/`Resume`; this ADR is the
-documentation slice (#96) and lands first._
+- **`WrapWithShell` contract landed (PR #98).** The function lives in
+  `internal/codexlaunch/invocation.go` as a pure
+  `func(shell string, args []string) []string`. `shell == ""` returns
+  args unchanged; otherwise it returns `["<shell>", "-lc", "exec <quoted args>"]`.
+  Manual single-quote escaping, no external dependency. 5 unit tests cover
+  the disabled, default-sh, single-quote-in-arg, special-chars, and
+  custom-shell cases.
+- **Two launcher integration tests** pin the wired behaviour: one asserts
+  `Shell: "sh"` produces a shell-wrapped tmux arg; the other asserts
+  `Shell: ""` (the zero value, matching every pre-existing launcher test)
+  still passes bare `codex` to tmux. The pre-#97 behaviour is the
+  regression guard, so future refactors can't silently re-introduce
+  wrapping for users who don't want it.
+- **All existing tests pass unchanged.** Every pre-existing launcher test
+  leaves `Shell` at its zero value, so the bare-codex assertions they
+  already made remain accurate. Zero churn to existing test fixtures.
+- **`CDXA_SHELL` env var read once in `main.go`.** `os.LookupEnv` cleanly
+  distinguishes unset (→ `sh`) from explicitly empty (→ `""` / disabled).
+  The shell value is threaded through `deps` → every `Launcher{}`
+  construction site (cockpit, spawn, send).
