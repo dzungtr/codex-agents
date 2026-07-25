@@ -150,6 +150,7 @@ func Run(codexHome, statePath, shell string) error {
 				ThreadID:     ev.ThreadID,
 				MessageCount: ev.MessageCount,
 				TokenCount:   ev.TokenCount,
+				Status:       ev.Status,
 			})
 		}
 	}()
@@ -549,4 +550,3 @@ func refreshAction(codexHome, statePath string) func() tea.Cmd {
 		}
 	}
 }
-

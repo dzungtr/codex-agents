@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
 )
 
 // fakeRunner is a processRunner that returns test-controlled pipes
@@ -82,8 +84,8 @@ func (f *fakeRunner) runFakeServer() {
 // manager wrote to the client-side stdin pipe. It returns the parsed
 // envelope and the raw line (so tests can inspect method/id).
 type capturedRequest struct {
-	Raw  string
-	Env  envelope
+	Raw string
+	Env envelope
 }
 
 func (f *fakeRunner) nextRequest(t *testing.T, timeout time.Duration) capturedRequest {
@@ -208,8 +210,8 @@ func TestManager_ItemCompleted_AgentMessageIncrementsCount(t *testing.T) {
 	if err := mgr.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	runner.nextRequest(t, time.Second)              // initialize
-	runner.nextRequest(t, time.Second)              // initialized
+	runner.nextRequest(t, time.Second) // initialize
+	runner.nextRequest(t, time.Second) // initialized
 
 	// One agentMessage completion → Event{MessageCount: 1}.
 	runner.writeNotification(t, "item/completed", map[string]any{
@@ -271,8 +273,8 @@ func TestManager_TokenUsageUpdated_EmitsEventTokenCount(t *testing.T) {
 		"threadId": "t-1",
 		"turnId":   "turn-1",
 		"tokenUsage": map[string]any{
-			"last":              map[string]any{"totalTokens": 1234, "inputTokens": 100, "outputTokens": 200, "cachedInputTokens": 0, "reasoningOutputTokens": 0},
-			"total":             map[string]any{"totalTokens": 9999, "inputTokens": 0, "outputTokens": 0, "cachedInputTokens": 0, "reasoningOutputTokens": 0},
+			"last":               map[string]any{"totalTokens": 1234, "inputTokens": 100, "outputTokens": 200, "cachedInputTokens": 0, "reasoningOutputTokens": 0},
+			"total":              map[string]any{"totalTokens": 9999, "inputTokens": 0, "outputTokens": 0, "cachedInputTokens": 0, "reasoningOutputTokens": 0},
 			"modelContextWindow": 200000,
 		},
 	})
@@ -285,6 +287,33 @@ func TestManager_TokenUsageUpdated_EmitsEventTokenCount(t *testing.T) {
 	// known message count in the UI.
 	if ev.MessageCount != -1 {
 		t.Errorf("event MessageCount = %d, want -1 (no change)", ev.MessageCount)
+	}
+}
+
+func TestManager_LifecycleEventsUpdateStatus(t *testing.T) {
+	runner := &fakeRunner{}
+	mgr := newManager("/codex", runner, 0, time.Now)
+	defer mgr.Stop()
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	runner.nextRequest(t, time.Second)
+	runner.nextRequest(t, time.Second)
+
+	for _, test := range []struct {
+		method string
+		status tmuxstatus.Status
+		kind   EventKind
+	}{
+		{"turn/started", tmuxstatus.StatusWorking, EventTurnStarted},
+		{"item/permissions/requestApproval", tmuxstatus.StatusWaiting, EventPermissionRequested},
+		{"turn/completed", tmuxstatus.StatusWaiting, EventTurnCompleted},
+	} {
+		runner.writeNotification(t, test.method, map[string]any{"threadId": "t-1"})
+		ev := expectEvent(t, mgr.Events(), time.Second)
+		if ev.Kind != test.kind || ev.Status != test.status {
+			t.Errorf("%s event = %+v, want kind=%v status=%v", test.method, ev, test.kind, test.status)
+		}
 	}
 }
 

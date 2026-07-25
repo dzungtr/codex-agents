@@ -18,7 +18,7 @@ import (
 // for a response; result is set on a success response, error on a
 // failure response.
 type envelope struct {
-	JSONRPC string          `json:"jsonrpc"`
+	JSONRPC string           `json:"jsonrpc"`
 	ID      *json.RawMessage `json:"id,omitempty"`
 	Method  string           `json:"method,omitempty"`
 	Params  json.RawMessage  `json:"params,omitempty"`
@@ -61,9 +61,9 @@ type Client struct {
 	nextID  atomic.Int64
 	pending sync.Map // map[string]chan *envelope (string key = JSON-encoded id)
 
-	notif chan Notification
+	notif     chan Notification
 	closeOnce sync.Once
-	closed   chan struct{}
+	closed    chan struct{}
 }
 
 // jsonRPCMaxLine caps the bufio.Scanner line buffer for a single
@@ -142,18 +142,18 @@ func (c *Client) readLoop() {
 			// live events.
 			continue
 		}
-		if env.ID != nil {
-			if ch, ok := c.pending.Load(idKey(env.ID)); ok {
-				ch.(chan *envelope) <- &env
-			}
-			// A response for an unknown id is ignored — likely a
-			// request that already timed out and was removed.
-		} else if env.Method != "" {
+		if env.Method != "" {
 			select {
 			case c.notif <- Notification{Method: env.Method, Params: env.Params}:
 			case <-c.closed:
 				return
 			}
+		} else if env.ID != nil {
+			if ch, ok := c.pending.Load(idKey(env.ID)); ok {
+				ch.(chan *envelope) <- &env
+			}
+			// A response for an unknown id is ignored — likely a
+			// request that already timed out and was removed.
 		}
 	}
 }
@@ -284,4 +284,3 @@ func marshalParams(params any) (json.RawMessage, error) {
 	}
 	return json.Marshal(params)
 }
-

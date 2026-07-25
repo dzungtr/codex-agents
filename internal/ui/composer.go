@@ -144,6 +144,7 @@ type ThreadLiveUpdateMsg struct {
 	ThreadID     string
 	MessageCount int
 	TokenCount   int
+	Status       tmuxstatus.Status
 }
 
 // composerProfile returns the profile name the composer would launch

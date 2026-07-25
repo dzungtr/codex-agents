@@ -21,7 +21,11 @@
 // codex integration.
 package codexserver
 
-import "time"
+import (
+	"time"
+
+	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
+)
 
 // EventKind tags a decoded App Server notification with what it means at
 // the cockpit's level of abstraction. The manager collapses the server's
@@ -44,6 +48,8 @@ const (
 	// notify hook remains the primary status-derivation source for
 	// cockpit-launched threads (ADR 0002 decision 6).
 	EventTurnCompleted
+	EventPermissionRequested
+	EventTurnStarted
 )
 
 // Event is one decoded, UI-ready update from the codex App Server, tagged
@@ -64,5 +70,6 @@ type Event struct {
 	Kind         EventKind
 	MessageCount int
 	TokenCount   int
+	Status       tmuxstatus.Status
 	At           time.Time
 }
