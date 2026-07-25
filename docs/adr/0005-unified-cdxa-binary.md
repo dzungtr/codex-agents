@@ -177,8 +177,9 @@ subcommands is a one-line map entry. The bubbletea model/view/update in `interna
 was untouched across all three slices, confirming the layering contract from decision
 3 (TUI rendering is downstream of the cockpit wiring). ADR 0003 decision 1 (the
 separate-binary split) is formally superseded; decisions 2–7 of ADR 0003 (JSON-only
-stdout, frozen exit-code mapping, three commands) remain in force and were not affected
-by the unification.
+stdout, frozen exit-code mapping, and the original three commands) remained in force
+and were not affected by the unification. ADR 0007 later extends that headless surface
+with `shutdown` without changing the unification result.
 
 ### Deferred work
 

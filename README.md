@@ -3,8 +3,8 @@
 A single binary that is both a **terminal cockpit** for running several
 [codex](https://github.com/openai/codex) agents in parallel and a **headless CLI**
 for codex thread delegation. Launched without a subcommand, `cdxa` opens the
-cockpit TUI; with a subcommand (`spawn`, `output`, `send`, `skills`), it performs
-headless JSON-only work. The cockpit is *only* a list view — the conversation
+cockpit TUI; with a subcommand (`spawn`, `output`, `send`, `shutdown`,
+`skills`), it performs headless JSON-only work. The cockpit is *only* a list view — the conversation
 experience is codex's own TUI, unmodified.
 
 ![codex-agents cockpit: list of codex threads in the terminal](assets/cdxa-preview.png)
@@ -121,14 +121,14 @@ is the attention mechanism; there are no desktop notifications.
 
 ### Headless delegation
 
-A codex thread can delegate work to another codex thread via four subcommands. All
+A codex thread can delegate work to another codex thread via five subcommands. All
 subcommand stdout is JSON-only with a frozen exit-code mapping; the vocabulary (thread,
 subthread, turn, leaf thread) is defined in [`CONTEXT.md`](CONTEXT.md).
 
 **`cdxa spawn`** — Launch a subthread into its own git worktree (default) or in-place in
 the parent's cwd (`--workspace inplace`). Returns `{"thread_id": "…"}` and blocks until
 the thread registers in codex's sqlite, so the returned id is immediately resolvable by
-`output` and `send`.
+`output`, `send`, and `shutdown`.
 
 ```sh
 tid=$(cdxa spawn "Audit the auth package for SQL injection." --workspace inplace | jq -r .thread_id)
@@ -154,6 +154,16 @@ dead.
 cdxa send "$tid" "Now also check the billing service."
 ```
 
+**`cdxa shutdown`** — Close a completed subthread's lifecycle after collecting its final
+turn. Shutdown stops the associated tmux session and soft-archives the Codex thread record;
+it leaves the worktree intact and the conversation recoverable with `codex unarchive`.
+Success returns `{"status":"archived","thread_id":"…"}`. Exit `2` means the thread is
+still working, `3` means it is unknown/already gone, and `1` is an operational error.
+
+```sh
+cdxa shutdown "$tid"
+```
+
 **`cdxa skills`** — Install an embedded skill file into an agent's skill folder. Skills are
 embedded in the binary via `go:embed`, so the installed file is always byte-identical to
 what the binary shipped — re-running after an upgrade is idempotent (unchanged skills are
@@ -164,7 +174,7 @@ cdxa skills cdxa-spawn --agent codex
 ```
 
 For copy-pasteable parent-thread prompt patterns — poll loops, turn tracking, send-then-
-collect refinement, `--wait` blocking, and workspace selection — see the
+collect refinement, `--wait` blocking, workspace selection, and safe shutdown — see the
 [cdxa subthread cookbook](docs/cdxa-subthread-cookbook.md).
 
 ## Documentation
@@ -179,7 +189,9 @@ docs/
 │   ├── 0002-codex-server-live-update.md
 │   ├── 0003-cdxa-subthread-cli.md
 │   ├── 0004-cdxa-skills-command.md
-│   └── 0005-unified-cdxa-binary.md
+│   ├── 0005-unified-cdxa-binary.md
+│   ├── 0006-shell-wrapped-codex-launch.md
+│   └── 0007-cdxa-shutdown-command.md
 └── cdxa-subthread-cookbook.md
 ```
 
@@ -199,5 +211,5 @@ memsearch search "unified binary" -c codex_agents --top-k 5
 memsearch search "worktree launch" -c codex_agents --top-k 5
 ```
 
-The vocabulary (thread, subthread, turn, leaf thread, prompt envelope) is defined in
+The vocabulary (thread, subthread, turn, shutdown, leaf thread, prompt envelope) is defined in
 [`CONTEXT.md`](CONTEXT.md).

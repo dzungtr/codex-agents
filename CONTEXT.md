@@ -3,8 +3,8 @@
 A single `cdxa` binary that is both a terminal cockpit for running several
 codex agents in parallel and a headless CLI that lets one codex thread
 delegate work to another. Launched without a subcommand, `cdxa` opens the
-cockpit TUI; with a subcommand (`spawn`, `output`, `send`, `skills`), it
-performs headless JSON-only work (ADR 0005).
+cockpit TUI; with a subcommand (`spawn`, `output`, `send`, `shutdown`,
+`skills`), it performs headless JSON-only work (ADR 0005).
 
 ## Language
 
@@ -30,6 +30,14 @@ own turn-start/turn-end markers in the rollout file. Subthread consumers
 address output by turn number, not by message content.
 _Avoid_: message, reply (a turn may contain many messages; only the last
 assistant message of a turn is collected)
+
+**Shutdown**:
+The headless lifecycle transition performed by `cdxa shutdown <thread-id>`
+after a subthread's latest turn completes: stop its associated tmux session
+and soft-archive the Codex thread record. Shutdown preserves conversation
+history for `codex unarchive` and leaves the worktree untouched.
+_Avoid_: delete (permanent `codex delete`), kill (only the tmux teardown
+step), cleanup (too vague about which lifecycle resources are affected)
 
 **Leaf thread**:
 A subthread stamped `IDENTITY: leaf` by its spawner via the prompt
