@@ -52,24 +52,32 @@ plain terminal — not just cockpit-launched ones.
  cockpit UUID that codex never wrote, producing duplicate rows after attach-then-detach.
 
 ### 3. tmux-per-thread process model
-
+ 
 Each cockpit-launched thread is a detached tmux session named `cxa-<thread-id-prefix>`
 running the real codex TUI. Entering a thread = attaching its session (`switch-client` when
 already inside tmux); a closed thread gets a fresh session running `codex resume <id>`.
 Detach returns to the list.
-
+ 
 Consequence: agents survive the cockpit and the terminal closing; there is zero custom
 transcript rendering; interrupt/quick-reply can be implemented against tmux primitives.
-
+The foreground process inside the pane is codex (after `exec`) — see
+[ADR 0006](0006-shell-wrapped-codex-launch.md) for the shell-wrapped launch form, which is
+the default invocation.
+ 
 ### 4. Worktree-per-thread launch semantics
 
 Every launch gets its own git worktree at `<repo-root>/.worktrees/<branch>`, branch slug
 generated from the task title (collision → numeric suffix). A non-git startup directory runs
 in place. Invocation:
-
+ 
 ```
-tmux new-session -d -s cxa-… -c <worktree> codex -p <profile> [-c model=…] "<task>"
+tmux new-session -d -s cxa-… -c <worktree> sh -lc 'exec codex -p <profile> [-c model=…] "<task>"'
 ```
+ 
+The `sh -lc 'exec codex …'` wrapper is the default; `CDXA_SHELL` controls the shell
+(unset → `sh`, explicitly empty → bare `codex`, any other value → that shell). See
+[ADR 0006](0006-shell-wrapped-codex-launch.md) for the rationale and the
+`WrapWithShell` contract.
 
 Profiles are codex config profiles (`$CODEX_HOME/<name>.config.toml`); the composer defaults
 to `general-agentic` because a detached launch implies an unattended posture.
