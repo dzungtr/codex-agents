@@ -2,6 +2,7 @@ package codexlaunch
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/dzungtr/codex-agents/internal/agentstate"
 	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
@@ -19,16 +20,20 @@ import (
 // Delivery is intentionally the cheap path the PRD calls for: two plain
 // tmux send-keys calls (literal text via tmuxstatus.SendKeysArgs, then a
 // separate Enter keypress via tmuxstatus.SendEnterArgs — see those
-// functions' doc comments for why they can't be combined into one call),
-// with no delivery confirmation and no retries. Callers are expected to
-// have already excluded closed threads (a dead tmux session has nothing to
-// send keys to); QuickReply itself doesn't re-check liveness.
+// functions' doc comments for why they can't be combined into one call).
+// A short sleep between them lets codex's TUI event loop flush the literal
+// text into the composer before Enter arrives, avoiding a race that can
+// leave the reply unsubmitted. There is no delivery confirmation or retry.
+// Callers are expected to have already excluded closed threads (a dead tmux
+// session has nothing to send keys to); QuickReply itself doesn't re-check
+// liveness.
 func (l *Launcher) QuickReply(threadID, text string) error {
 	session := tmuxstatus.SessionName(threadID)
 
 	if err := l.Tmux.Run(tmuxstatus.SendKeysArgs(session, text)); err != nil {
 		return fmt.Errorf("codexlaunch: send reply text: %w", err)
 	}
+	time.Sleep(150 * time.Millisecond)
 	if err := l.Tmux.Run(tmuxstatus.SendEnterArgs(session)); err != nil {
 		return fmt.Errorf("codexlaunch: send reply enter: %w", err)
 	}
