@@ -20,6 +20,8 @@ func TestQuickReply_SendsTextThenEnterToTheThreadsSession(t *testing.T) {
 	}
 
 	wantSession := tmuxstatus.SessionName("thread1")
+	// The fake runner records calls synchronously, so the production sleep is
+	// unobservable here; assert the two calls still happen in delivery order.
 	if len(tmux.calls) != 2 {
 		t.Fatalf("expected exactly two tmux calls (text, then enter), got %v", tmux.calls)
 	}
