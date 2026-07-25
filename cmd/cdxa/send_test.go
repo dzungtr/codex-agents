@@ -38,7 +38,7 @@ func fakeReplierDeps(t *testing.T, replier *fakeReplier, state fakeState) deps {
 		statePath: "/state.json",
 		state:     state,
 		live:      func(string) bool { return true },
-		replier:   func(_, _ string) subthread.Replier { return replier },
+		replier:   func(_, _, _ string) subthread.Replier { return replier },
 	}
 }
 
@@ -117,7 +117,7 @@ func TestRunSend_DeadSession_Exit3(t *testing.T) {
 		statePath: "/state.json",
 		state:     state,
 		live:      func(string) bool { return false }, // dead session
-		replier:   func(_, _ string) subthread.Replier { return replier },
+		replier:   func(_, _, _ string) subthread.Replier { return replier },
 	}
 
 	out := captureStdout(t, func() {

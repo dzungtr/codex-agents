@@ -95,6 +95,14 @@ type Launcher struct {
 	// the notify wrapper can forward to it (PRD #1 / issue #4). Empty
 	// skips the lookup — the wrapper then only records turn-ended events.
 	CodexHome string
+	// Shell is the login shell used to wrap the codex invocation so a
+	// launched thread inherits the user's full shell environment (PATH,
+	// aliases, exports from ~/.profile etc.) rather than only the tmux
+	// server's minimal environment (PRD #95 / issue #97). Empty disables
+	// wrapping — the bare codex argv is passed to tmux unchanged. cmd/cdxa
+	// populates this from CDXA_SHELL (unset -> "sh", explicitly empty ->
+	// "" / disabled).
+	Shell string
 	// ExecutablePath resolves the cdxa binary's own path, used to
 	// configure it as codex's notify hook (re-invoked in hook mode; see
 	// internal/notifyhook). Defaults to os.Executable; tests override for
@@ -385,6 +393,7 @@ func (l *Launcher) Launch(req LaunchRequest) (LaunchResult, error) {
 	session := tmuxstatus.SessionName(handle)
 	notifyArgs := l.notifyArgsFor(session, profile)
 	codexArgs := NewThreadArgs(NewThreadSpec{Profile: profile, Model: req.Model, Task: req.Task, Notify: notifyArgs})
+	codexArgs = WrapWithShell(l.Shell, codexArgs)
 	tmuxArgs := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(session, ws.WorkDir, codexArgs))
 
 	if err := l.Tmux.Run(tmuxArgs); err != nil {
@@ -485,7 +494,8 @@ func (l *Launcher) Resume(threadID, cwd, profile string) (LaunchResult, error) {
 	}
 
 	session := tmuxstatus.SessionName(threadID)
-	tmuxArgs := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(session, cwd, ResumeArgs(threadID, resumeProfile)))
+	codexArgs := WrapWithShell(l.Shell, ResumeArgs(threadID, resumeProfile))
+	tmuxArgs := tmuxstatus.ChainArgs(tmuxstatus.RemainOnExitArgs(), tmuxstatus.MouseOnArgs(), tmuxstatus.WheelUpArgs(), tmuxstatus.WheelDownArgs(), tmuxstatus.ModifierKeysArgs(), tmuxstatus.NewSessionArgs(session, cwd, codexArgs))
 	if err := l.Tmux.Run(tmuxArgs); err != nil {
 		return LaunchResult{}, fmt.Errorf("codexlaunch: start resume tmux session: %w", err)
 	}

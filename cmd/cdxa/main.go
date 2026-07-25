@@ -43,6 +43,13 @@ type deps struct {
 	// reused by spawn (which writes launch bookkeeping to the same file the
 	// cockpit reads — ADR 0001 decision 2).
 	statePath string
+	// shell is the login shell used to wrap codex invocations so
+	// launched threads inherit the user's full shell environment (PRD
+	// #95 / issue #97). Resolved once from CDXA_SHELL: unset -> "sh"
+	// (wrapping on), explicitly empty -> "" (wrapping off). Passed to
+	// every codexlaunch.Launcher construction site so a single env var
+	// read covers a whole cdxa run.
+	shell string
 	// replier builds a subthread.Replier for runSend. nil in production
 	// (newReplier is used); tests set it to inject a fake-wired Replier, the
 	// same DI pattern runSpawn uses for the spawner factory.
@@ -85,7 +92,7 @@ func run(args []string) int {
 			printError(err)
 			return 1
 		}
-		if err := cockpit.Run(d.codexHome, d.statePath); err != nil {
+		if err := cockpit.Run(d.codexHome, d.statePath, d.shell); err != nil {
 			printError(err)
 			return 1
 		}
@@ -141,9 +148,23 @@ func newDeps() (deps, error) {
 		live:      subthread.DefaultLiveness(tmuxstatus.ListLiveSessions),
 		codexHome: codexHome,
 		statePath: statePath,
+		shell:        resolveShell(),
 		homeResolver: resolveAgentHome,
 		skillLookup:  subthread.Lookup,
 	}, nil
+}
+
+// resolveShell honors $CDXA_SHELL to choose the login shell that wraps
+// codex invocations (PRD #95 / issue #97). Unset -> "sh" (wrapping on by
+// default); explicitly set to "" -> "" (wrapping disabled, bare codex).
+// os.LookupEnv distinguishes "unset" from "set to empty", which Getenv
+// alone cannot.
+func resolveShell() string {
+	shell, ok := os.LookupEnv("CDXA_SHELL")
+	if !ok {
+		return "sh"
+	}
+	return shell
 }
 
 // resolveCodexHome honors $CODEX_HOME (as codex's own CLI does) before

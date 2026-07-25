@@ -723,3 +723,69 @@ func TestLaunch_RegistrationTimeout_KillsSessionAndReturnsError(t *testing.T) {
 		t.Fatalf("expected no state entries after a registration timeout, got %v", st.Threads)
 	}
 }
+
+// TestLaunch_ShellWrapsCodexInvocation verifies the PRD #95 wiring:
+// when Launcher.Shell is set, the codex argv passed to tmux new-session is
+// wrapped as [<shell>, -lc, exec 'codex' …]. When Shell is empty, the bare
+// codex argv is passed unchanged (existing tests cover this case).
+func TestLaunch_ShellWrapsCodexInvocation(t *testing.T) {
+	git := &fakeGitRunner{responses: map[string]fakeGitResponse{
+		"[rev-parse --show-toplevel]":                           {out: "/repo\n"},
+		"[rev-parse --verify --quiet refs/heads/fix-auth-hook]": {err: fmt.Errorf("exit 1")},
+	}}
+	tmux := &fakeTmuxRunner{}
+	l, _ := newTestLauncher(t, git, tmux, []string{"0123456789abcdef"})
+	l.Shell = "sh"
+
+	res, err := l.Launch(LaunchRequest{StartDir: "/repo/sub", Task: "Fix auth hook", Profile: "general-agentic"})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	_ = res
+
+	got := tmux.calls[0]
+	// Find the new-session arg group inside the chained call; the last
+	// group in ChainArgs is the new-session invocation.
+	chained := strings.Split(strings.Join(got, " "), " ; ")
+	last := chained[len(chained)-1]
+	if !strings.Contains(last, "new-session") {
+		t.Fatalf("expected new-session in last chained group, got %q", last)
+	}
+	// The command portion after the workdir flag should be the wrapped
+	// form: sh -lc exec 'codex' …
+	if !strings.Contains(last, "sh -lc exec 'codex'") {
+		t.Errorf("expected shell-wrapped invocation in new-session args, got %q", last)
+	}
+	if !strings.Contains(last, "'Fix auth hook'") {
+		t.Errorf("expected task quoted in shell wrapper, got %q", last)
+	}
+}
+
+// TestLaunch_ShellEmptyPassesBareCodex is the symmetric regression guard:
+// Launcher.Shell == "" must preserve the pre-#97 bare-codex invocation,
+// matching the behaviour all existing launcher tests already assert.
+func TestLaunch_ShellEmptyPassesBareCodex(t *testing.T) {
+	git := &fakeGitRunner{responses: map[string]fakeGitResponse{
+		"[rev-parse --show-toplevel]":                           {out: "/repo\n"},
+		"[rev-parse --verify --quiet refs/heads/fix-auth-hook]": {err: fmt.Errorf("exit 1")},
+	}}
+	tmux := &fakeTmuxRunner{}
+	l, _ := newTestLauncher(t, git, tmux, []string{"0123456789abcdef"})
+	// Shell intentionally left zero value ("").
+
+	res, err := l.Launch(LaunchRequest{StartDir: "/repo/sub", Task: "Fix auth hook", Profile: "general-agentic"})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	_ = res
+
+	got := tmux.calls[0]
+	chained := strings.Split(strings.Join(got, " "), " ; ")
+	last := chained[len(chained)-1]
+	if strings.Contains(last, "-lc") {
+		t.Errorf("Shell==\"\" must not produce a shell wrapper, got %q", last)
+	}
+	if !strings.Contains(last, "codex -p general-agentic") {
+		t.Errorf("expected bare codex invocation in new-session args, got %q", last)
+	}
+}

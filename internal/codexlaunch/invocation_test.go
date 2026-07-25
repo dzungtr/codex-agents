@@ -100,3 +100,50 @@ func TestResumeArgs_EmptyProfileOmitsFlag(t *testing.T) {
 		t.Errorf("ResumeArgs() = %v, want %v", got, want)
 	}
 }
+
+func TestWrapWithShell_Disabled(t *testing.T) {
+	got := WrapWithShell("", []string{"codex", "-p", "profile", "task"})
+	want := []string{"codex", "-p", "profile", "task"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("WrapWithShell(\"\", _) = %v, want %v (unchanged)", got, want)
+	}
+}
+
+func TestWrapWithShell_DefaultSh(t *testing.T) {
+	got := WrapWithShell("sh", []string{"codex", "-p", "profile", "task"})
+	// Every arg is uniformly single-quoted (decision 12: no special-casing).
+	want := []string{"sh", "-lc", "exec 'codex' '-p' 'profile' 'task'"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("WrapWithShell(\"sh\", _) = %v, want %v", got, want)
+	}
+}
+
+func TestWrapWithShell_SingleQuoteInArg(t *testing.T) {
+	got := WrapWithShell("sh", []string{"codex", "fix user's bug"})
+	// The apostrophe in "user's" must be escaped as '\''
+	// (close quote, escaped quote, reopen): 'fix user'\''s bug'
+	want := []string{"sh", "-lc", "exec 'codex' 'fix user'\\''s bug'"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("WrapWithShell(single-quote) = %v, want %v", got, want)
+	}
+}
+
+func TestWrapWithShell_SpecialChars(t *testing.T) {
+	// $, backticks, ;, ", | are all literal inside single quotes.
+	// No further escaping is needed — the test confirms WrapWithShell
+	// produces a valid single-quoted shell string for each arg.
+	args := []string{"codex", "echo $HOME", "run `whoami`", "a;b", `say "hi"`, "cat | grep"}
+	got := WrapWithShell("sh", args)
+	want := []string{"sh", "-lc", "exec 'codex' 'echo $HOME' 'run `whoami`' 'a;b' 'say \"hi\"' 'cat | grep'"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("WrapWithShell(special chars) = %v, want %v", got, want)
+	}
+}
+
+func TestWrapWithShell_CustomShell(t *testing.T) {
+	got := WrapWithShell("zsh", []string{"codex", "-p", "profile", "task"})
+	want := []string{"zsh", "-lc", "exec 'codex' '-p' 'profile' 'task'"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("WrapWithShell(\"zsh\", _) = %v, want %v", got, want)
+	}
+}

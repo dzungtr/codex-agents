@@ -15,7 +15,7 @@ import (
 // subthread.Spawner for runSpawn. It is a field on deps so tests inject a
 // fake-wired Spawner by constructing deps directly (the same DI pattern
 // runOutput uses for state/live), rather than via a package-global override.
-type spawnerFn func(codexHome, statePath, startDir string) *subthread.Spawner
+type spawnerFn func(codexHome, statePath, startDir, shell string) *subthread.Spawner
 
 // runSpawn implements `cdxa spawn "task" [--profile X]` (ADR 0003 decision
 // 2, issue #29): it launches a new codex thread headlessly into a worktree
@@ -80,7 +80,7 @@ func runSpawn(args []string, d deps) (int, error) {
 		return exitOperErr, fmt.Errorf("cdxa spawn: invalid --workspace %q (want worktree or inplace)", workspaceFlag)
 	}
 
-	spawner := newSpawnerFor(d, d.codexHome, d.statePath, startDir)
+	spawner := newSpawnerFor(d, d.codexHome, d.statePath, startDir, d.shell)
 	threadID, err := spawner.Spawn(task, profile, workspaceMode)
 	if err != nil {
 		return exitOperErr, fmt.Errorf("cdxa spawn: %w", err)
@@ -95,12 +95,13 @@ func runSpawn(args []string, d deps) (int, error) {
 // codexstate.ThreadRegistered (the newest state_*.sqlite threads table,
 // ADR 0001 decision 2). Both reuse the cockpit's existing machinery
 // unchanged — spawn is a headless surface over the same launch path.
-func newSpawner(codexHome, statePath, startDir string) *subthread.Spawner {
+func newSpawner(codexHome, statePath, startDir, shell string) *subthread.Spawner {
 	launcher := &codexlaunch.Launcher{
 		Git:       codexlaunch.ExecGitRunner{},
 		Tmux:      tmuxstatus.ExecRunner{},
 		StatePath: statePath,
 		CodexHome: codexHome,
+		Shell:     shell,
 	}
 	return &subthread.Spawner{
 		Launch:     launcherAdapter{l: launcher, startDir: startDir},
@@ -112,11 +113,11 @@ func newSpawner(codexHome, statePath, startDir string) *subthread.Spawner {
 // populate d.spawner) and the production newSpawner otherwise. The
 // indirection is a field on deps rather than a package global so it follows
 // the same DI pattern runOutput uses for state/live.
-func newSpawnerFor(d deps, codexHome, statePath, startDir string) *subthread.Spawner {
+func newSpawnerFor(d deps, codexHome, statePath, startDir, shell string) *subthread.Spawner {
 	if d.spawner != nil {
-		return d.spawner(codexHome, statePath, startDir)
+		return d.spawner(codexHome, statePath, startDir, shell)
 	}
-	return newSpawner(codexHome, statePath, startDir)
+	return newSpawner(codexHome, statePath, startDir, shell)
 }
 
 // launcherAdapter exposes the subset of *codexlaunch.Launcher that

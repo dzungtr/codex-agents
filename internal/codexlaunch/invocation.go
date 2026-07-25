@@ -5,7 +5,10 @@
 // codex's CLI flags or the `.worktrees/<branch>` convention.
 package codexlaunch
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // NewThreadSpec describes a new codex thread to launch.
 type NewThreadSpec struct {
@@ -68,4 +71,36 @@ func ResumeArgs(threadID, profile string) []string {
 		return []string{"codex", "resume", threadID}
 	}
 	return []string{"codex", "-p", profile, "resume", threadID}
+}
+
+// WrapWithShell wraps a codex argv in a login shell so the launched thread
+// inherits the user's full shell environment (PATH, aliases, exports from
+// ~/.profile, ~/.bash_profile, ~/.zprofile, etc.) rather than only whatever
+// minimal environment the tmux server has (PRD #95 / issue #97).
+//
+// shell == "" disables wrapping: args is returned unchanged, preserving the
+// pre-#97 bare-codex invocation. This is the explicit opt-out path
+// (CDXA_SHELL="" in the environment).
+//
+// Otherwise the result is ["<shell>", "-lc", "<command string>"] where the
+// command string is the args, each single-quote-escaped and joined with
+// spaces, prepended with "exec ". The login shell (-l) sources its rc files
+// to load the environment; exec then replaces the shell process with codex,
+// so the process tree, signal behaviour, and tmux pane ownership are
+// identical to the bare-codex path — only the environment differs.
+//
+// Single-quote escaping is manual (no external dependency): each arg is
+// wrapped in single quotes, and any internal single quote is replaced with
+// the '\'' sequence (close quote, escaped quote, reopen). Everything inside
+// single quotes is literal to the shell, so $, backticks, ;, ", | and other
+// metacharacters need no further escaping.
+func WrapWithShell(shell string, args []string) []string {
+	if shell == "" {
+		return args
+	}
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = "'" + strings.ReplaceAll(a, "'", "'\\''") + "'"
+	}
+	return []string{shell, "-lc", "exec " + strings.Join(quoted, " ")}
 }
