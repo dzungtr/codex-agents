@@ -14,7 +14,7 @@ import (
 // fake-wired Replier by constructing deps directly (the same DI pattern
 // runSpawn uses for the spawner factory, and runOutput uses for state/live),
 // rather than via a package-global override.
-type replierFn func(codexHome, statePath string) subthread.Replier
+type replierFn func(codexHome, statePath, shell string) subthread.Replier
 
 // runSend implements `cdxa send <thread-id> "msg"` (ADR 0003 decision 2,
 // issue #31): it delivers a one-line follow-up into a living subthread's
@@ -39,7 +39,7 @@ func runSend(args []string, d deps) (int, error) {
 		return exitOperErr, fmt.Errorf("cdxa send: message must not be empty")
 	}
 
-	replier := newReplierFor(d, d.codexHome, d.statePath)
+	replier := newReplierFor(d, d.codexHome, d.statePath, d.shell)
 	turn, err := subthread.Send(d.state, d.live, replier, d.codexHome, threadID, msg)
 	if err != nil {
 		if errors.Is(err, subthread.ErrGone) {
@@ -61,11 +61,12 @@ func runSend(args []string, d deps) (int, error) {
 // text, then a separate Enter keypress, then clearing the recorded
 // last-turn-event) satisfies subthread.Replier. The launcher is constructed
 // fresh on every send call — send keeps no job state (ADR 0003 decision 4).
-func newReplier(codexHome, statePath string) subthread.Replier {
+func newReplier(codexHome, statePath, shell string) subthread.Replier {
 	return &codexlaunch.Launcher{
 		Tmux:      tmuxstatus.ExecRunner{},
 		StatePath: statePath,
 		CodexHome: codexHome,
+		Shell:     shell,
 	}
 }
 
@@ -73,9 +74,9 @@ func newReplier(codexHome, statePath string) subthread.Replier {
 // populate d.replier) and the production newReplier otherwise. The
 // indirection is a field on deps rather than a package global so it follows
 // the same DI pattern runSpawn/runOutput use.
-func newReplierFor(d deps, codexHome, statePath string) subthread.Replier {
+func newReplierFor(d deps, codexHome, statePath, shell string) subthread.Replier {
 	if d.replier != nil {
-		return d.replier(codexHome, statePath)
+		return d.replier(codexHome, statePath, shell)
 	}
-	return newReplier(codexHome, statePath)
+	return newReplier(codexHome, statePath, shell)
 }

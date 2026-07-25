@@ -42,7 +42,7 @@ func fakeSpawnerDeps(t *testing.T, launcher *fakeSubthreadLauncher, registrar *f
 	return deps{
 		codexHome: "/codex",
 		statePath: "/state.json",
-		spawner: func(_, _, _ string) *subthread.Spawner {
+		spawner: func(_, _, _, _ string) *subthread.Spawner {
 			return &subthread.Spawner{
 				Launch:           launcher,
 				Registered:       registrar,
@@ -125,7 +125,7 @@ func TestRunSpawn_RegistrationTimeout_JSONErrorExit1(t *testing.T) {
 	d := deps{
 		codexHome: "/codex",
 		statePath: "/state.json",
-		spawner: func(_, _, _ string) *subthread.Spawner {
+		spawner: func(_, _, _, _ string) *subthread.Spawner {
 			return &subthread.Spawner{
 				Launch:           launcher,
 				Registered:       registrar,
@@ -180,7 +180,7 @@ func TestRunSpawn_NoTask_JSONErrorExit1(t *testing.T) {
 // silent regressions in the adapter wiring that the fake-based tests above
 // can't see.
 func TestNewSpawner_ProductionWiring(t *testing.T) {
-	s := newSpawner("/tmp/nonexistent-codexhome", "/tmp/nonexistent-state.json", "/tmp")
+	s := newSpawner("/tmp/nonexistent-codexhome", "/tmp/nonexistent-state.json", "/tmp", "sh")
 	if s == nil {
 		t.Fatal("expected non-nil Spawner")
 	}
@@ -215,7 +215,7 @@ func fakeSpawnerDepsWithMode(t *testing.T, launcher *fakeSubthreadLauncherWithMo
 	return deps{
 		codexHome: "/codex",
 		statePath: "/state.json",
-		spawner: func(_, _, _ string) *subthread.Spawner {
+		spawner: func(_, _, _, _ string) *subthread.Spawner {
 			return &subthread.Spawner{
 				Launch:           launcher,
 				Registered:       registrar,

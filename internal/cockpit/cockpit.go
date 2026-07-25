@@ -42,7 +42,7 @@ const defaultBaseBranch = "main"
 // the program exits. Returns the bubbletea program's error (or any setup
 // error encountered before program.Run is called) — the caller's job is
 // to surface it to the user.
-func Run(codexHome, statePath string) error {
+func Run(codexHome, statePath, shell string) error {
 	startDir, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("codex-agents: resolve working directory: %w", err)
@@ -53,6 +53,7 @@ func Run(codexHome, statePath string) error {
 		Tmux:      tmuxstatus.ExecRunner{},
 		StatePath: statePath,
 		CodexHome: codexHome,
+		Shell:     shell,
 	}
 
 	profiles, err := codexlaunch.DiscoverProfiles(codexHome)
