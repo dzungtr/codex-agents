@@ -9,6 +9,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/dzungtr/codex-agents/internal/tmuxstatus"
 )
 
 // DefaultThrottleInterval is the per-thread minimum gap between emitted
@@ -148,17 +150,17 @@ func newManager(codexHome string, runner processRunner, throttle time.Duration, 
 		now = time.Now
 	}
 	return &Manager{
-		codexHome: codexHome,
-		runner:    runner,
-		events:    make(chan Event, 128),
-		msgCounts: map[string]int{},
-		tokCounts: map[string]int{},
-		lastEmit:  map[string]time.Time{},
+		codexHome:  codexHome,
+		runner:     runner,
+		events:     make(chan Event, 128),
+		msgCounts:  map[string]int{},
+		tokCounts:  map[string]int{},
+		lastEmit:   map[string]time.Time{},
 		subscribed: map[string]bool{},
-		throttle:  throttle,
-		now:       now,
-		stopCh:    make(chan struct{}),
-		doneCh:    make(chan struct{}),
+		throttle:   throttle,
+		now:        now,
+		stopCh:     make(chan struct{}),
+		doneCh:     make(chan struct{}),
 	}
 }
 
@@ -380,6 +382,10 @@ func (m *Manager) handleNotification(n Notification) {
 		m.handleTokenUsageUpdated(n.Params)
 	case "turn/completed":
 		m.handleTurnCompleted(n.Params)
+	case "turn/started":
+		m.handleTurnStarted(n.Params)
+	case "item/permissions/requestApproval":
+		m.handlePermissionRequested(n.Params)
 	}
 }
 
@@ -443,7 +449,7 @@ func (m *Manager) handleItemCompleted(params json.RawMessage) {
 // turn's total).
 func (m *Manager) handleTokenUsageUpdated(params json.RawMessage) {
 	var p struct {
-		ThreadID string `json:"threadId"`
+		ThreadID   string `json:"threadId"`
 		TokenUsage struct {
 			Last struct {
 				TotalTokens int `json:"totalTokens"`
@@ -458,8 +464,8 @@ func (m *Manager) handleTokenUsageUpdated(params json.RawMessage) {
 	tok := m.tokCounts[p.ThreadID]
 	m.mu.Unlock()
 	m.emitIfNotThrottled(p.ThreadID, Event{
-		ThreadID:   p.ThreadID,
-		Kind:       EventTokenCount,
+		ThreadID: p.ThreadID,
+		Kind:     EventTokenCount,
 		// MessageCount is irrelevant on a token-usage event; set
 		// the -1 sentinel so a single-token-update event doesn't
 		// zero out the thread's known message count in the UI.
@@ -486,8 +492,25 @@ func (m *Manager) handleTurnCompleted(params json.RawMessage) {
 		// in-place patch must not touch either count.
 		MessageCount: -1,
 		TokenCount:   -1,
+		Status:       tmuxstatus.StatusWaiting,
 		At:           m.now(),
 	})
+}
+
+func (m *Manager) handleTurnStarted(params json.RawMessage) {
+	threadID, err := threadIDFromParams(params)
+	if err != nil || threadID == "" {
+		return
+	}
+	m.send(Event{ThreadID: threadID, Kind: EventTurnStarted, MessageCount: -1, TokenCount: -1, Status: tmuxstatus.StatusWorking, At: m.now()})
+}
+
+func (m *Manager) handlePermissionRequested(params json.RawMessage) {
+	threadID, err := threadIDFromParams(params)
+	if err != nil || threadID == "" {
+		return
+	}
+	m.send(Event{ThreadID: threadID, Kind: EventPermissionRequested, MessageCount: -1, TokenCount: -1, Status: tmuxstatus.StatusWaiting, At: m.now()})
 }
 
 // emitIfNotThrottled is the ADR 0002 throttling policy (open-question

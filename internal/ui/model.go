@@ -277,6 +277,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.TokenCount >= 0 {
 				m.rows[i].Thread.TokenCount = msg.TokenCount
 			}
+			if msg.Status != tmuxstatus.StatusClosed {
+				m.rows[i].Status = msg.Status
+				sortRows(m.rows)
+				m.applyFilter()
+			}
 			return m, nil
 		}
 		return m, nil
