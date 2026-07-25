@@ -68,6 +68,17 @@ type deps struct {
 	// runSkills. nil in production (subthread.Lookup is used); tests
 	// set it to inject a canned registry, same DI pattern as spawner.
 	skillLookup skillLookupFn
+	// shutdownSessions builds a subthread.SessionStopper for runShutdown.
+	// nil in production (subthread.DefaultSessionStopper is used); tests
+	// set it to inject a fake that records Stop calls and scripts the
+	// kill outcome without touching a real tmux server, the same DI
+	// pattern spawner / replier / homeResolver use.
+	shutdownSessions shutdownSessionsFn
+	// shutdownArchiver builds a subthread.CodexArchiver for runShutdown.
+	// nil in production (subthread.DefaultCodexArchiver is used); tests
+	// set it to inject a fake that records Archive calls and scripts the
+	// archive outcome without shelling out to a real codex binary.
+	shutdownArchiver shutdownArchiverFn
 }
 
 // stdout is the writer runOutput/runSpawn and printError emit JSON to.
@@ -103,6 +114,7 @@ func run(args []string) int {
 		"output":      runOutput,
 		"spawn":       runSpawn,
 		"send":        runSend,
+		"shutdown":    runShutdown,
 		"skills":      runSkills,
 		"notify-hook": runNotifyHookCmd,
 	}
@@ -111,7 +123,7 @@ func run(args []string) int {
 	cmd, ok := cmds[name]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "cdxa: unknown command %q\n", name)
-		fmt.Fprintln(os.Stderr, "commands: spawn, output, send, skills, notify-hook")
+		fmt.Fprintln(os.Stderr, "commands: spawn, output, send, shutdown, skills, notify-hook")
 		fmt.Fprintln(os.Stderr, "(no command opens the cockpit TUI)")
 		return 1
 	}
@@ -149,8 +161,10 @@ func newDeps() (deps, error) {
 		codexHome: codexHome,
 		statePath: statePath,
 		shell:        resolveShell(),
-		homeResolver: resolveAgentHome,
-		skillLookup:  subthread.Lookup,
+		homeResolver:     resolveAgentHome,
+		skillLookup:      subthread.Lookup,
+		shutdownSessions: subthread.DefaultSessionStopper,
+		shutdownArchiver: subthread.DefaultCodexArchiver,
 	}, nil
 }
 
