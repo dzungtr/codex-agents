@@ -22,18 +22,18 @@ existing machinery, not new machinery.
 > **Superseded by ADR 0005.** This decision is superseded by [ADR 0005
 > (Unified cdxa binary)](0005-unified-cdxa-binary.md). `cmd/codex-agents`
 > and `cmd/cdxa` are now a single binary (`cdxa`); the headless subcommands
-> (`spawn`, `output`, `send`, `skills`) dispatch before any bubbletea
+> (`spawn`, `output`, `send`, `shutdown`, `skills`) dispatch before any bubbletea
 > init, achieving the same isolation without the dual-binary deployment
 > hazard. The JSON-only-stdout contract for those subcommands is unchanged.
 
 `cmd/cdxa` was a second binary built from the same module, sharing
 `internal/`. The cockpit binary (`cmd/codex-agents`) bootstraps bubbletea
 on startup; a parent codex thread invoking it for a headless call would
-couple delegation to a TUI lifecycle it never sees. All three commands
-print JSON to stdout — the consumers are codex threads parsing tool
-output, not humans.
+couple delegation to a TUI lifecycle it never sees. All headless commands
+print JSON to stdout — the consumers are codex threads parsing tool output,
+not humans.
 
-### 2. Three commands, async by default
+### 2. Headless commands, async delegation by default
 
 - `cdxa spawn "task" [--profile X] [--workspace worktree|inplace]` —
   launches a detached tmux codex thread (codexlaunch semantics), blocks
@@ -47,6 +47,11 @@ output, not humans.
 - `cdxa send <thread-id> "msg"` — tmux send-keys follow-up into the
   living session (codexlaunch.QuickReply), prints the turn number the
   follow-up started.
+- `cdxa shutdown <thread-id>` — after a completed turn, stops the
+  associated tmux session and soft-archives Codex's thread record. It
+  preserves the `0`/`2`/`3`/`1` outcome meanings and JSON-only stdout;
+  the completion gate, payloads, sequencing, and retry contract are
+  governed by [ADR 0007](0007-cdxa-shutdown-command.md).
 
 Async (spawn returns immediately, parent polls) over sync (spawn blocks
 until done): the parent stays free to take input and do other work while
@@ -67,7 +72,7 @@ progress-reporting upgrade, explicitly out of scope here.
 
 ### 4. Thread id is the job id; cdxa keeps no job state
 
-`spawn` returns codex's own thread id; `output`/`send` resolve it back
+`spawn` returns codex's own thread id; `output`/`send`/`shutdown` resolve it back
 to rollout path and tmux session (`cxa-<prefix>`) via codex's sqlite on
 every call. No records in `~/.codex-agents/state.json` beyond what the
 cockpit already keeps. Consistent with ADR 0001 decision 2: codex's
@@ -113,9 +118,16 @@ it ever earns one.
 - `send` inherits QuickReply's limits: no delivery confirmation, no
   retries, and nothing to send to if the subthread's tmux session died
   (callers exclude closed threads first).
+- `shutdown` is the lifecycle close for a completed subthread. It uses
+  Codex's sanctioned archive command and leaves worktree cleanup to a
+  separate safety-checked workflow (ADR 0007).
 - The feature inherits ADR 0001's schema-drift posture: if codex changes
   the sqlite layout or rollout format, cdxa degrades the same way the
   cockpit does, because it shares `internal/codexstate`.
+
+The later shutdown extension is designed and measured separately under
+ADR 0007; the historical results below describe the original spawn/output/
+send initiative only.
 
 ## Measured results
 

@@ -8,9 +8,9 @@ prints to stdout, and the exit code it returns.
 Vocabulary follows [`CONTEXT.md`](../CONTEXT.md): a **thread** is one codex
 conversation; a **subthread** is a thread launched by another thread via
 `cdxa spawn`; a **turn** is one completed unit of assistant work within a
-thread, addressed by turn number. The architectural contract — three
-commands, JSON-only stdout, and the frozen exit-code mapping — is
-[ADR 0003](adr/0003-cdxa-subthread-cli.md).
+thread, addressed by turn number. The delegation and JSON/exit-code contract
+is [ADR 0003](adr/0003-cdxa-subthread-cli.md); the completed-subthread
+lifecycle close is [ADR 0007](adr/0007-cdxa-shutdown-command.md).
 
 ## Commands at a glance
 
@@ -19,10 +19,11 @@ commands, JSON-only stdout, and the frozen exit-code mapping — is
 | `cdxa spawn "task" [--profile X] [--workspace worktree\|inplace]` | `{"thread_id": "…"}` | `0` spawned + registered; `1` launch/timeout/usage error |
 | `cdxa output <thread-id> [--wait N]` | `{"status","turn","message"}` | `0` a completed turn is available; `2` still working; `3` thread unknown or gone; `1` operational error |
 | `cdxa send <thread-id> "msg"` | `{"turn": N}` | `0` delivered; `3` thread unknown or session dead; `1` operational error |
+| `cdxa shutdown <thread-id>` | `{"status":"archived","thread_id":"…"}` | `0` archived + session clean; `2` still working; `3` unknown/already gone; `1` operational error |
 
-Exit-code mapping is owned by `run()` in `cmd/cdxa/main.go` and the
-`exitCodeFor` switch in `cmd/cdxa/output.go`; the `status` strings
-(`"done"`, `"working"`, `"gone"`) come from `internal/subthread.Status`.
+Exit-code mapping is owned by `run()` and the thin command adapters in
+`cmd/cdxa`; command status strings include `"done"`, `"working"`, `"gone"`,
+and shutdown's `"archived"`.
 Exit codes `0`/`2`/`3`/`1` are API — parent prompts hard-code them, so
 changing a value breaks every deployed delegation prompt.
 
@@ -239,11 +240,60 @@ default to worktree — the worktree is the safety boundary.
 
 ---
 
+## Pattern 6 — Collect → shutdown
+
+Shutdown only after consuming the final completed turn. Branch on the exit
+code exactly as for output; do not infer success from an empty tmux listing
+or invoke `codex archive` yourself.
+
+```
+After the subthread's final result has been consumed, close its process and
+Codex lifecycle while retaining its worktree for review.
+
+  out=$(cdxa shutdown "$tid"); code=$?
+  case $code in
+    0)
+      test "$(echo "$out" | jq -r .status)" = archived || exit 1
+      echo "subthread archived"
+      ;;
+    2)
+      echo "subthread still working; resume cdxa output polling"
+      ;;
+    3)
+      echo "subthread already gone"
+      ;;
+    1)
+      echo "shutdown failed: $out" >&2
+      ;;
+  esac
+
+Expected shapes:
+  success  →  {"status":"archived","thread_id":"<tid>"}  # exit 0
+  working  →  {"status":"working","thread_id":"<tid>"}   # exit 2
+  gone     →  {"status":"gone","thread_id":"<tid>"}      # exit 3
+  error    →  {"error":"cdxa shutdown: …"}                 # exit 1
+```
+
+Notes:
+- Eligibility is rollout-based: at least one turn completed and no newer
+  turn in progress. A live session waiting for input is eligible; a live
+  session with no completed turn is working; one that died before output is
+  gone.
+- Shutdown stops tmux before calling `codex archive`. A missing tmux target
+  is already clean. A real tmux failure prevents archive; a later Codex
+  archive failure leaves the record available for retry.
+- Archive is reversible with `codex unarchive`. Shutdown never calls
+  `codex delete` and never removes the worktree or branch.
+
+---
+
 ## See also
 
 - [ADR 0003 — cdxa subthread CLI](adr/0003-cdxa-subthread-cli.md): the
-  architectural contract (three commands, exit-code mapping, workspace
+  delegation contract (commands, exit-code mapping, workspace
   strategy, turn addressing).
+- [ADR 0007 — cdxa shutdown command](adr/0007-cdxa-shutdown-command.md):
+  completion gating, teardown ordering, idempotency, and archive semantics.
 - [`CONTEXT.md`](../CONTEXT.md): vocabulary (thread, subthread, turn) used
   consistently across cdxa and the cockpit.
 - [ADR 0001 — codex-agents cockpit architecture](adr/0001-codex-agents-cockpit-architecture.md):
